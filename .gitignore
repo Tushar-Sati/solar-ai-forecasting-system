@@ -1,0 +1,9 @@
+venv/
+venv_gpu/
+__pycache__/
+*.pyc
+*.pkl
+*.h5
+*.csv
+*.db
+.env

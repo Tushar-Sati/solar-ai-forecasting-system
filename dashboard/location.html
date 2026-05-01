@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Location | Solar AI</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-page="location">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark"><i data-lucide="sun"></i></div><div><h1>Solar AI</h1><span>Forecasting platform</span></div></div>
+      <nav class="nav">
+        <a href="index.html"><i data-lucide="home"></i>Home</a>
+        <a href="forecast.html"><i data-lucide="line-chart"></i>Forecasts</a>
+        <a class="active" href="location.html"><i data-lucide="map-pin"></i>Location</a>
+        <a href="history.html"><i data-lucide="bar-chart-3"></i>Analytics</a>
+        <a href="pv-system.html"><i data-lucide="sliders-horizontal"></i>PV System</a>
+        <a href="powerbi.html"><i data-lucide="pie-chart"></i>Power BI</a>
+        <a href="admin.html"><i data-lucide="shield-check"></i>Admin</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title"><h2>Location and Solar Map</h2><p id="active-location">Loading selected location...</p></div>
+        <div class="toolbar"><span class="status-pill"><span id="api-dot" class="status-dot"></span><span id="api-status">Checking API</span></span><button class="btn icon-btn" data-theme-toggle title="Theme"><i data-lucide="moon-star"></i></button><button class="btn icon-btn" id="refresh-btn" title="Refresh"><i data-lucide="refresh-cw"></i></button></div>
+      </header>
+
+      <section class="card panel">
+        <div class="panel-head">
+          <div><h3 class="panel-title">Select Location</h3><p class="panel-subtitle">Country, state, city, or browser geolocation.</p></div>
+          <button class="btn primary" id="geo-btn"><i data-lucide="crosshair"></i>Use My Location</button>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label for="country-input">Country</label><input id="country-input" class="input" autocomplete="country-name"></div>
+          <div class="field"><label for="state-input">State</label><input id="state-input" class="input" autocomplete="address-level1"></div>
+          <div class="field"><label for="city-input">City</label><input id="city-input" class="input" autocomplete="address-level2"></div>
+        </div>
+        <div class="toolbar" style="justify-content:flex-start;margin-top:10px">
+          <button class="btn primary" id="location-apply"><i data-lucide="search"></i>Find Location</button>
+          <span class="status-pill" id="refresh-meta">Auto-refresh paused</span>
+        </div>
+        <div id="search-results" class="search-results"></div>
+      </section>
+
+      <section class="grid content-grid" style="margin-top:14px">
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">Interactive Solar Intensity Map</h3><p class="panel-subtitle">Selected coordinates and current irradiance radius.</p></div></div>
+          <div id="solar-map"></div>
+        </div>
+        <div class="grid">
+          <article class="card kpi" style="--accent: var(--amber)"><div class="kpi-head"><span>GHI</span><i class="kpi-icon" data-lucide="sun-medium"></i></div><div class="kpi-value"><span id="kpi-ghi">--</span><span class="kpi-unit">W/m2</span></div><div class="kpi-foot" id="kpi-ghi-note">Live irradiance</div></article>
+          <article class="card kpi" style="--accent: var(--cyan)"><div class="kpi-head"><span>Temperature</span><i class="kpi-icon" data-lucide="thermometer"></i></div><div class="kpi-value"><span id="kpi-temp">--</span><span class="kpi-unit">C</span></div><div class="kpi-foot" id="kpi-weather">--</div></article>
+          <article class="card kpi" style="--accent: var(--green)"><div class="kpi-head"><span>Humidity</span><i class="kpi-icon" data-lucide="droplets"></i></div><div class="kpi-value"><span id="kpi-humidity">--</span><span class="kpi-unit">%</span></div><div class="kpi-foot">Dew point <span id="kpi-dew">--</span> C</div></article>
+          <article class="card kpi" style="--accent: var(--blue)"><div class="kpi-head"><span>Wind</span><i class="kpi-icon" data-lucide="wind"></i></div><div class="kpi-value"><span id="kpi-wind">--</span><span class="kpi-unit">m/s</span></div><div class="kpi-foot">Cloud cover <span id="kpi-cloud">--</span>%</div></article>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="assets/common.js"></script>
+  <script src="assets/dashboard.js"></script>
+</body>
+</html>
+

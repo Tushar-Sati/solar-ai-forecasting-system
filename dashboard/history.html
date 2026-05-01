@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Analytics | Solar AI</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-page="history">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark"><i data-lucide="sun"></i></div><div><h1>Solar AI</h1><span>Forecasting platform</span></div></div>
+      <nav class="nav">
+        <a href="index.html"><i data-lucide="home"></i>Home</a>
+        <a href="forecast.html"><i data-lucide="line-chart"></i>Forecasts</a>
+        <a href="location.html"><i data-lucide="map-pin"></i>Location</a>
+        <a class="active" href="history.html"><i data-lucide="bar-chart-3"></i>Analytics</a>
+        <a href="pv-system.html"><i data-lucide="sliders-horizontal"></i>PV System</a>
+        <a href="powerbi.html"><i data-lucide="pie-chart"></i>Power BI</a>
+        <a href="admin.html"><i data-lucide="shield-check"></i>Admin</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title"><h2>Historical Analytics</h2><p id="active-location">Loading stored readings...</p></div>
+        <div class="toolbar"><span class="status-pill"><span id="api-dot" class="status-dot"></span><span id="api-status">Checking API</span></span><button class="btn icon-btn" data-theme-toggle title="Theme"><i data-lucide="moon-star"></i></button><button class="btn icon-btn" id="refresh-btn" title="Refresh"><i data-lucide="refresh-cw"></i></button></div>
+      </header>
+      <section class="grid two-grid">
+        <div class="card panel"><div class="panel-head"><div><h3 class="panel-title">Historical Trend</h3><p class="panel-subtitle">Stored readings from MySQL.</p></div></div><div id="history-chart" class="chart"></div></div>
+        <div class="card panel"><div class="panel-head"><div><h3 class="panel-title">Monthly Analytics</h3><p class="panel-subtitle">Aggregated from saved readings.</p></div></div><div id="monthly-chart" class="chart"></div></div>
+      </section>
+      <section class="card panel" style="margin-top:14px">
+        <div class="panel-head"><div><h3 class="panel-title">Prediction History</h3><p class="panel-subtitle">Recent model inference events.</p></div></div>
+        <div id="predictions-table"></div>
+      </section>
+    </main>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="assets/common.js"></script>
+  <script src="assets/dashboard.js"></script>
+</body>
+</html>
+

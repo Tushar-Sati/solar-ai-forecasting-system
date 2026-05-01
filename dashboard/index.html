@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solar AI Forecasting Platform</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-page="home">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><i data-lucide="sun"></i></div>
+        <div>
+          <h1>Solar AI</h1>
+          <span>Forecasting platform</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a class="active" href="index.html"><i data-lucide="home"></i>Home</a>
+        <a href="forecast.html"><i data-lucide="line-chart"></i>Forecasts</a>
+        <a href="location.html"><i data-lucide="map-pin"></i>Location</a>
+        <a href="history.html"><i data-lucide="bar-chart-3"></i>Analytics</a>
+        <a href="pv-system.html"><i data-lucide="sliders-horizontal"></i>PV System</a>
+        <a href="powerbi.html"><i data-lucide="pie-chart"></i>Power BI</a>
+        <a href="admin.html"><i data-lucide="shield-check"></i>Admin</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title">
+          <h2>Solar Energy Overview</h2>
+          <p id="active-location">Loading live solar forecast...</p>
+        </div>
+        <div class="toolbar">
+          <span class="status-pill"><span id="api-dot" class="status-dot"></span><span id="api-status">Checking API</span></span>
+          <button class="btn icon-btn" data-theme-toggle title="Theme"><i data-lucide="moon-star"></i></button>
+          <button class="btn icon-btn" id="refresh-btn" title="Refresh"><i data-lucide="refresh-cw"></i></button>
+        </div>
+      </header>
+
+      <section class="card panel hero-panel">
+        <div>
+          <h1 class="hero-title">Live solar forecasting, model inference, and energy analytics.</h1>
+          <p class="hero-copy">A compact home view for the current location. Detailed forecast, map, PV configuration, historical analytics, and Power BI reporting are on separate pages.</p>
+        </div>
+        <div class="toolbar" style="justify-content:flex-start">
+          <a class="btn primary" href="forecast.html"><i data-lucide="line-chart"></i>Open Forecasts</a>
+          <a class="btn" href="location.html"><i data-lucide="map-pin"></i>Change Location</a>
+          <button class="btn" id="geo-btn"><i data-lucide="crosshair"></i>Use My Location</button>
+        </div>
+      </section>
+
+      <section class="grid kpi-grid" style="margin-top:14px">
+        <article class="card kpi" style="--accent: var(--amber)">
+          <div class="kpi-head"><span>Current Solar Irradiance</span><i class="kpi-icon" data-lucide="sun-medium"></i></div>
+          <div class="kpi-value"><span id="kpi-ghi">--</span><span class="kpi-unit">W/m2</span></div>
+          <div class="kpi-foot" id="kpi-ghi-note">Fetching live irradiance</div>
+        </article>
+        <article class="card kpi" style="--accent: var(--cyan)">
+          <div class="kpi-head"><span>Temperature</span><i class="kpi-icon" data-lucide="thermometer"></i></div>
+          <div class="kpi-value"><span id="kpi-temp">--</span><span class="kpi-unit">C</span></div>
+          <div class="kpi-foot" id="kpi-weather">--</div>
+        </article>
+        <article class="card kpi" style="--accent: var(--green)">
+          <div class="kpi-head"><span>Estimated Power</span><i class="kpi-icon" data-lucide="zap"></i></div>
+          <div class="kpi-value"><span id="kpi-power">--</span><span class="kpi-unit">kW</span></div>
+          <div class="kpi-foot" id="kpi-power-note">PV settings required</div>
+        </article>
+        <article class="card kpi" style="--accent: var(--blue)">
+          <div class="kpi-head"><span>Today's Peak</span><i class="kpi-icon" data-lucide="activity"></i></div>
+          <div class="kpi-value"><span id="kpi-peak">--</span><span class="kpi-unit">W/m2</span></div>
+          <div class="kpi-foot">From live hourly curve</div>
+        </article>
+      </section>
+
+      <section class="grid home-grid" style="margin-top:14px">
+        <div class="card panel">
+          <div class="panel-head">
+            <div>
+              <h3 class="panel-title">Today's Solar Curve</h3>
+              <p class="panel-subtitle">GHI, DNI, and DHI from the live provider.</p>
+            </div>
+          </div>
+          <div id="irradiance-chart" class="chart compact"></div>
+        </div>
+        <div class="grid">
+          <div class="card panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title">AI Model Output</h3>
+                <p class="panel-subtitle">Latest real-time prediction.</p>
+              </div>
+            </div>
+            <div class="model-stack">
+              <div class="metric-row"><span class="metric-label">Ensemble</span><span class="metric-value" id="pred-ensemble">--</span></div>
+              <div class="metric-row"><span class="metric-label">Confidence</span><span class="metric-value" id="pred-confidence">--</span></div>
+              <div class="metric-row"><span class="metric-label">CO2 Offset</span><span class="metric-value"><span id="kpi-co2">--</span> kg</span></div>
+              <div class="metric-row"><span class="metric-label">Efficiency</span><span class="metric-value"><span id="kpi-eff">--</span>%</span></div>
+            </div>
+          </div>
+          <div class="card panel">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title">Weather Snapshot</h3>
+                <p class="panel-subtitle">Current environmental inputs.</p>
+              </div>
+            </div>
+            <div class="model-stack">
+              <div class="metric-row"><span class="metric-label">Humidity</span><span class="metric-value"><span id="kpi-humidity">--</span>%</span></div>
+              <div class="metric-row"><span class="metric-label">Wind</span><span class="metric-value"><span id="kpi-wind">--</span> m/s</span></div>
+              <div class="metric-row"><span class="metric-label">Cloud</span><span class="metric-value"><span id="kpi-cloud">--</span>%</span></div>
+              <div class="metric-row"><span class="metric-label">UV Index</span><span class="metric-value" id="kpi-uv">--</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="link-grid" style="margin-top:14px">
+        <a class="card link-card" href="forecast.html"><strong>Forecasts</strong><span>Hourly and 7-day solar curves</span></a>
+        <a class="card link-card" href="location.html"><strong>Location</strong><span>Search, geolocation, and map</span></a>
+        <a class="card link-card" href="history.html"><strong>Analytics</strong><span>Historical and monthly reports</span></a>
+        <a class="card link-card" href="pv-system.html"><strong>PV System</strong><span>Capacity and efficiency settings</span></a>
+        <a class="card link-card" href="powerbi.html"><strong>Power BI</strong><span>MySQL reporting views</span></a>
+        <a class="card link-card" href="admin.html"><strong>Admin</strong><span>Logs, users, models, uploads</span></a>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="assets/common.js"></script>
+  <script src="assets/dashboard.js"></script>
+</body>
+</html>

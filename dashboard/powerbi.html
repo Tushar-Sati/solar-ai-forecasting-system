@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Power BI | Solar AI</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-page="powerbi">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark"><i data-lucide="sun"></i></div><div><h1>Solar AI</h1><span>Forecasting platform</span></div></div>
+      <nav class="nav">
+        <a href="index.html"><i data-lucide="home"></i>Home</a>
+        <a href="forecast.html"><i data-lucide="line-chart"></i>Forecasts</a>
+        <a href="location.html"><i data-lucide="map-pin"></i>Location</a>
+        <a href="history.html"><i data-lucide="bar-chart-3"></i>Analytics</a>
+        <a href="pv-system.html"><i data-lucide="sliders-horizontal"></i>PV System</a>
+        <a class="active" href="powerbi.html"><i data-lucide="pie-chart"></i>Power BI</a>
+        <a href="admin.html"><i data-lucide="shield-check"></i>Admin</a>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title"><h2>Power BI Reporting</h2><p id="active-location">MySQL reporting views for Power BI Desktop.</p></div>
+        <div class="toolbar"><span class="status-pill"><span id="api-dot" class="status-dot"></span><span id="api-status">Checking API</span></span><button class="btn icon-btn" data-theme-toggle title="Theme"><i data-lucide="moon-star"></i></button><button class="btn icon-btn" id="refresh-btn" title="Refresh"><i data-lucide="refresh-cw"></i></button></div>
+      </header>
+      <section class="grid three-grid">
+        <article class="card kpi" style="--accent: var(--amber)"><div class="kpi-head"><span>Forecast Analytics</span><i class="kpi-icon" data-lucide="line-chart"></i></div><div class="kpi-value">Live</div><div class="kpi-foot">Prediction and power output views</div></article>
+        <article class="card kpi" style="--accent: var(--green)"><div class="kpi-head"><span>Location Reports</span><i class="kpi-icon" data-lucide="map"></i></div><div class="kpi-value">MySQL</div><div class="kpi-foot">Direct Power BI connection</div></article>
+        <article class="card kpi" style="--accent: var(--blue)"><div class="kpi-head"><span>Operations</span><i class="kpi-icon" data-lucide="radio"></i></div><div class="kpi-value">Logs</div><div class="kpi-foot">API and model monitoring</div></article>
+      </section>
+      <section id="views" class="card panel" style="margin-top:14px">
+        <div class="panel-head"><div><h3 class="panel-title">Available Power BI Views</h3><p class="panel-subtitle">Import these views from MySQL in Power BI Desktop.</p></div></div>
+        <div id="powerbi-table"></div>
+      </section>
+      <section class="link-grid" style="margin-top:14px">
+        <a class="card link-card" href="#views"><strong>Forecast Views</strong><span>Prediction and location datasets</span></a>
+        <a class="card link-card" href="#views"><strong>Operational Views</strong><span>API health and model performance</span></a>
+        <a class="card link-card" href="admin.html"><strong>Admin Monitoring</strong><span>API logs and model registry</span></a>
+      </section>
+    </main>
+  </div>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="assets/common.js"></script>
+  <script src="assets/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+Loading solar forecasting models...
+  LSTM loaded
+  XGBoost, scaler, feature columns loaded
+Model startup complete.
+
+ * Serving Flask app 'api.app'
+ * Debug mode: off

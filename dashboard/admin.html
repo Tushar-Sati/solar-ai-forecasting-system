@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solar AI Admin</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <section id="login-shell" class="login-shell">
+    <div class="card login-card">
+      <div class="brand">
+        <div class="brand-mark"><i data-lucide="shield-check"></i></div>
+        <div>
+          <h1>Admin Console</h1>
+          <span>Solar forecasting operations</span>
+        </div>
+      </div>
+      <form id="login-form" class="grid">
+        <div class="field">
+          <label for="login-email">Email</label>
+          <input id="login-email" class="input" type="email" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="login-password">Password</label>
+          <input id="login-password" class="input" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="btn primary" type="submit"><i data-lucide="log-in"></i>Login</button>
+      </form>
+      <p class="panel-subtitle" style="margin-top:14px">Seed the first admin with ADMIN_EMAIL and ADMIN_PASSWORD in `.env`, or use bootstrap when no users exist.</p>
+      <form id="bootstrap-form" class="grid hidden" style="margin-top:14px">
+        <div class="field">
+          <label for="bootstrap-name">Admin Name</label>
+          <input id="bootstrap-name" class="input" required>
+        </div>
+        <div class="field">
+          <label for="bootstrap-email">Admin Email</label>
+          <input id="bootstrap-email" class="input" type="email" required>
+        </div>
+        <div class="field">
+          <label for="bootstrap-password">Admin Password</label>
+          <input id="bootstrap-password" class="input" type="password" required>
+        </div>
+        <button class="btn" type="submit"><i data-lucide="user-plus"></i>Create First Admin</button>
+      </form>
+    </div>
+  </section>
+
+  <div id="admin-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><i data-lucide="sun"></i></div>
+        <div>
+          <h1>Solar AI</h1>
+          <span>Admin operations</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="active" data-view="overview"><i data-lucide="gauge"></i>Overview</button>
+        <button data-view="users"><i data-lucide="users"></i>Users</button>
+        <button data-view="models"><i data-lucide="brain-circuit"></i>Models</button>
+        <button data-view="predictions"><i data-lucide="list-checks"></i>Predictions</button>
+        <button data-view="uploads"><i data-lucide="upload"></i>Uploads</button>
+        <button data-view="jobs"><i data-lucide="workflow"></i>Retraining</button>
+        <button data-view="logs"><i data-lucide="terminal-square"></i>Logs</button>
+        <button data-view="powerbi"><i data-lucide="bar-chart-3"></i>Power BI</button>
+        <a href="/"><i data-lucide="layout-dashboard"></i>User Dashboard</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="page-title">
+          <h2>Admin Dashboard</h2>
+          <p id="admin-user">Authenticated</p>
+        </div>
+        <div class="toolbar">
+          <button class="btn icon-btn" data-theme-toggle title="Theme"><i data-lucide="moon-star"></i></button>
+          <button class="btn icon-btn" id="admin-refresh" title="Refresh"><i data-lucide="refresh-cw"></i></button>
+          <button class="btn danger" id="logout-btn"><i data-lucide="log-out"></i>Logout</button>
+        </div>
+      </header>
+
+      <section id="view-overview" class="admin-view grid">
+        <div class="grid kpi-grid">
+          <article class="card kpi" style="--accent: var(--amber)"><div class="kpi-head"><span>Locations</span><i class="kpi-icon" data-lucide="map-pin"></i></div><div class="kpi-value" id="admin-locations">--</div><div class="kpi-foot">Stored sites</div></article>
+          <article class="card kpi" style="--accent: var(--cyan)"><div class="kpi-head"><span>Readings</span><i class="kpi-icon" data-lucide="database"></i></div><div class="kpi-value" id="admin-readings">--</div><div class="kpi-foot">Weather records</div></article>
+          <article class="card kpi" style="--accent: var(--green)"><div class="kpi-head"><span>Predictions</span><i class="kpi-icon" data-lucide="activity"></i></div><div class="kpi-value" id="admin-predictions">--</div><div class="kpi-foot">Forecast events</div></article>
+          <article class="card kpi" style="--accent: var(--blue)"><div class="kpi-head"><span>API Logs</span><i class="kpi-icon" data-lucide="radio"></i></div><div class="kpi-value" id="admin-api-logs">--</div><div class="kpi-foot">Provider calls</div></article>
+        </div>
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">API Monitoring</h3><p class="panel-subtitle">Provider health from request logs.</p></div></div>
+          <div id="api-health-table"></div>
+        </div>
+      </section>
+
+      <section id="view-users" class="admin-view grid hidden">
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">Create User</h3><p class="panel-subtitle">Admin, operator, or viewer accounts.</p></div></div>
+          <form id="user-form" class="form-grid">
+            <div class="field"><label for="user-name">Name</label><input id="user-name" class="input" required></div>
+            <div class="field"><label for="user-email">Email</label><input id="user-email" class="input" type="email" required></div>
+            <div class="field"><label for="user-password">Password</label><input id="user-password" class="input" type="password" required></div>
+            <div class="field"><label for="user-role">Role</label><select id="user-role" class="select"><option>viewer</option><option>operator</option><option>admin</option></select></div>
+            <button class="btn primary" type="submit"><i data-lucide="user-plus"></i>Create User</button>
+          </form>
+        </div>
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">User Management</h3><p class="panel-subtitle">Accounts stored in MySQL.</p></div></div>
+          <div id="users-table"></div>
+        </div>
+      </section>
+
+      <section id="view-models" class="admin-view grid hidden">
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">Model Performance</h3><p class="panel-subtitle">Registry metrics and load status.</p></div></div>
+          <div id="model-status" class="toolbar" style="justify-content:flex-start;margin-bottom:12px"></div>
+          <div id="models-table"></div>
+        </div>
+      </section>
+
+      <section id="view-predictions" class="admin-view grid hidden">
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">Prediction Logs</h3><p class="panel-subtitle">Real-time inference history.</p></div></div>
+          <div id="predictions-table"></div>
+        </div>
+      </section>
+
+      <section id="view-uploads" class="admin-view grid hidden">
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">Dataset Uploads</h3><p class="panel-subtitle">CSV, Parquet, or Excel files for retraining workflow.</p></div></div>
+          <form id="upload-form" class="toolbar" style="justify-content:flex-start">
+            <input id="dataset-file" class="input" type="file" accept=".csv,.parquet,.xlsx,.xls" required>
+            <button class="btn primary" type="submit"><i data-lucide="upload"></i>Upload</button>
+          </form>
+        </div>
+        <div class="card panel">
+          <div id="uploads-table"></div>
+        </div>
+      </section>
+
+      <section id="view-jobs" class="admin-view grid hidden">
+        <div class="card panel">
+          <div class="panel-head">
+            <div><h3 class="panel-title">Retraining Jobs</h3><p class="panel-subtitle">Runs preprocessing, XGBoost training, and LSTM training in the background.</p></div>
+            <button class="btn primary" id="retrain-btn"><i data-lucide="play"></i>Trigger Retraining</button>
+          </div>
+          <div id="jobs-table"></div>
+        </div>
+      </section>
+
+      <section id="view-logs" class="admin-view grid hidden">
+        <div class="grid two-grid">
+          <div class="card panel">
+            <div class="panel-head"><div><h3 class="panel-title">API Logs</h3><p class="panel-subtitle">External provider request history.</p></div></div>
+            <div id="api-logs-table"></div>
+          </div>
+          <div class="card panel">
+            <div class="panel-head"><div><h3 class="panel-title">System Alerts</h3><p class="panel-subtitle">Backend warnings and errors.</p></div></div>
+            <div id="system-logs-table"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-powerbi" class="admin-view grid hidden">
+        <div class="card panel">
+          <div class="panel-head"><div><h3 class="panel-title">Power BI Integration</h3><p class="panel-subtitle">Connect Power BI Desktop to MySQL and import these views.</p></div></div>
+          <div id="powerbi-table"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+  <script src="assets/common.js"></script>
+  <script src="assets/admin.js"></script>
+</body>
+</html>
