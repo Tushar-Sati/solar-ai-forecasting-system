@@ -20,5 +20,9 @@ COPY . .
 # Expose port (Render automatically maps the PORT environment variable)
 EXPOSE 5000
 
-# Run the application using gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "--timeout", "120", "api.app:app"]
+# Reduce memory fragmentation
+ENV MALLOC_ARENA_MAX=2
+ENV TF_FORCE_GPU_ALLOW_GROWTH=true
+
+# Run the application using gunicorn with fewer threads to save memory
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "2", "--timeout", "120", "api.app:app"]

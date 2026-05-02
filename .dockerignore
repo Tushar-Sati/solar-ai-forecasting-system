@@ -5,14 +5,10 @@ __pycache__/
 .git/
 .env
 .vercel/
-*.csv
-*.pkl
-*.h5
-*.pt
-data/
+data/raw/
+data/processed/
 notebooks/
 powerbi/
 sql/
 uploads/
 docs/
-dashboard/
