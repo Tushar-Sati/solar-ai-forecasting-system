@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: solar-ai-api
+    env: docker
+    plan: free
+    branch: main
