@@ -13,6 +13,8 @@ import csv
 import json
 import os
 import secrets
+import sqlite3
+import re
 import subprocess
 import sys
 import threading
@@ -66,6 +68,7 @@ try:
     print("  LSTM loaded")
 except Exception as exc:  # pragma: no cover - startup diagnostic
     lstm_model = None
+    lstm_error = str(exc)
     print(f"  LSTM unavailable: {exc}")
 
 try:
@@ -75,6 +78,7 @@ try:
     y_max = joblib.load(model_path("y_max.pkl"))
     print("  XGBoost, scaler, feature columns loaded")
 except Exception as exc:  # pragma: no cover - startup diagnostic
+    xgb_error = str(exc)
     xgb_model = scaler = feat_cols = y_max = None
     print(f"  XGBoost stack unavailable: {exc}")
 
@@ -480,7 +484,19 @@ def log_system(
         pass
 
 
+FETCH_CACHE = {}
+
 def fetch_json(provider: str, url: str, params: dict[str, Any], timeout: int = 18) -> dict[str, Any]:
+    global FETCH_CACHE
+    cache_key = f"{url}?{json_dumps(params)}"
+    now = time.time()
+    
+    # Check cache (valid for 10 minutes) to avoid 429 Rate Limit
+    if cache_key in FETCH_CACHE:
+        cached_time, cached_payload = FETCH_CACHE[cache_key]
+        if now - cached_time < 600:
+            return cached_payload
+
     started = time.perf_counter()
     status_code = None
     try:
@@ -503,10 +519,14 @@ def fetch_json(provider: str, url: str, params: dict[str, Any], timeout: int = 1
             True,
             {"top_level_keys": list(payload.keys())[:12]},
         )
+        FETCH_CACHE[cache_key] = (now, payload)
         return payload
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         log_api_request(provider, url, params, status_code, latency_ms, False, error_message=str(exc))
+        # If rate limited, return cached payload if available (even if expired)
+        if cache_key in FETCH_CACHE:
+            return FETCH_CACHE[cache_key][1]
         raise
 
 
@@ -1188,12 +1208,14 @@ def health():
             "status": "running",
             "timestamp": datetime.now().isoformat(),
             "refresh_seconds": APP_REFRESH_SECONDS,
-            "models": {
-                "xgboost": xgb_model is not None,
-                "lstm": lstm_model is not None,
-                "scaler": scaler is not None,
-                "features": len(feat_cols or []),
-            },
+        "models": {
+            "xgboost": xgb_model is not None,
+            "lstm": lstm_model is not None,
+            "scaler": scaler is not None,
+            "features": len(feat_cols or []),
+            "lstm_error": globals().get("lstm_error"),
+            "xgb_error": globals().get("xgb_error"),
+        },
             "database": db_ok,
             "providers": {
                 "primary": ["Open-Meteo"],
