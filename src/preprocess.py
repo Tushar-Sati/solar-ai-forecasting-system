@@ -12,7 +12,8 @@ HOW TO RUN:
 import os
 import numpy as np
 import pandas as pd
-import pymysql
+import sqlite3
+from pathlib import Path
 import joblib
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
@@ -33,8 +34,7 @@ LOCATION_ID  = 1     # matches what we inserted in Phase 1
 # ══════════════════════════════════════════════════════════
 def load_from_mysql():
     print("\n[1/6] Loading data from MySQL...")
-    conn = pymysql.connect(
-        host     = os.getenv("DB_HOST", "localhost"),
+    conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
         user     = os.getenv("DB_USER", "root"),
         password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
         database = os.getenv("DB_NAME", "solar_forecast_db"),
@@ -45,7 +45,7 @@ def load_from_mysql():
                temperature_c, humidity_pct,
                wind_speed_ms, pressure_hpa, cloud_cover_pct
         FROM solar_readings
-        WHERE location_id = %s
+        WHERE location_id = ?
         ORDER BY timestamp ASC
     """
     df = pd.read_sql(query, conn, params=(LOCATION_ID,))

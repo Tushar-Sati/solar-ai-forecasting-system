@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import joblib
 import numpy as np
-import pymysql
+import sqlite3
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -81,16 +81,45 @@ except Exception as exc:  # pragma: no cover - startup diagnostic
 print("Model startup complete.\n")
 
 
+class SQLiteCursorWrapper:
+    def __init__(self, cursor):
+        self.cursor = cursor
+    def execute(self, sql, params=()):
+        sql = sql.replace("AUTO_INCREMENT", "AUTOINCREMENT")
+        sql = sql.replace("INT AUTOINCREMENT", "INTEGER AUTOINCREMENT")
+        sql = sql.replace("BIGINT AUTOINCREMENT", "INTEGER AUTOINCREMENT")
+        sql = re.sub(r"ENUM\([^)]+\)", "TEXT", sql)
+        sql = re.sub(r",\s*INDEX\s+\w+\s*\([^)]+\)", "", sql)
+        sql = sql.replace("%s", "?")
+        if "SHOW COLUMNS FROM" in sql:
+            match = re.search(r"SHOW COLUMNS FROM `?(\w+)`?", sql)
+            if match:
+                sql = f"PRAGMA table_info(`{match.group(1)}`)"
+        self.cursor.execute(sql, params)
+        self.lastrowid = self.cursor.lastrowid
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        return dict(row) if row else None
+    def fetchall(self):
+        return [dict(row) for row in self.cursor.fetchall()]
+
+class SQLiteConnWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+    def cursor(self):
+        return SQLiteCursorWrapper(self.conn.cursor())
+    def commit(self):
+        self.conn.commit()
+    def close(self):
+        self.conn.close()
+
 def get_db():
-    return pymysql.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "solar_forecast_db"),
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=False,
-    )
+    db_path = BASE_DIR / "solar_forecast_db.sqlite3"
+    import sqlite3
+    import re
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return SQLiteConnWrapper(conn)
 
 
 def to_jsonable(value: Any) -> Any:
@@ -145,8 +174,11 @@ def db_execute(sql: str, params: tuple[Any, ...] = ()) -> int:
 
 def table_columns(table_name: str) -> set[str]:
     try:
-        rows = db_query_all(f"SHOW COLUMNS FROM `{table_name}`")
-        return {row["Field"] for row in rows}
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(f"PRAGMA table_info(`{table_name}`)")
+            rows = cur.fetchall()
+        return {row["name"] for row in rows}
     except Exception:
         return set()
 
@@ -1340,7 +1372,7 @@ def history():
         rows = db_query_all(
             """
             SELECT
-              DATE_FORMAT(timestamp, '%%Y-%%m-%%d %%H:00:00') AS ts,
+              strftime('%Y-%m-%d %H:00:00', timestamp) AS ts,
               ROUND(AVG(ghi), 2) AS ghi,
               ROUND(AVG(dni), 2) AS dni,
               ROUND(AVG(dhi), 2) AS dhi,
@@ -1351,7 +1383,7 @@ def history():
             FROM solar_readings
             WHERE location_id=%s
               AND timestamp >= NOW() - INTERVAL %s DAY
-            GROUP BY DATE_FORMAT(timestamp, '%%Y-%%m-%%d %%H:00:00')
+            GROUP BY strftime('%Y-%m-%d %H:00:00', timestamp)
             ORDER BY ts ASC
             """,
             (location_id, days),

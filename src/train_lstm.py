@@ -15,7 +15,8 @@ import numpy as np
 import joblib
 import json
 from datetime import date
-import pymysql
+import sqlite3
+from pathlib import Path
 from dotenv import load_dotenv
 
 import tensorflow as tf
@@ -208,8 +209,7 @@ def save_and_register(model, metrics):
 
     # Register in MySQL
     try:
-        conn = pymysql.connect(
-            host     = os.getenv("DB_HOST", "localhost"),
+        conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
             user     = os.getenv("DB_USER", "root"),
             password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
             database = os.getenv("DB_NAME", "solar_forecast_db"),
@@ -228,7 +228,7 @@ def save_and_register(model, metrics):
                 INSERT INTO model_registry
                     (model_name, version, training_date, rmse, mae,
                      r2_score, hyperparams, file_path, is_active)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (?,?,?,?,?,?,?,?,?)
             """, (
                 "LSTM", "1.0", date.today(),
                 round(metrics["rmse"], 4),

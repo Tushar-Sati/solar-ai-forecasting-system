@@ -1,7 +1,8 @@
 -- Power BI direct-query/import views.
 -- Connect Power BI Desktop to MySQL and select these views for live reports.
 
-CREATE OR REPLACE VIEW vw_powerbi_forecast_analytics AS
+DROP VIEW IF EXISTS vw_powerbi_forecast_analytics;
+CREATE VIEW vw_powerbi_forecast_analytics AS
 SELECT
   p.prediction_id,
   p.prediction_time,
@@ -18,11 +19,12 @@ SELECT
   p.confidence_score,
   p.mae,
   DATE(p.prediction_time) AS prediction_date,
-  HOUR(p.prediction_time) AS prediction_hour
+  CAST(strftime('%H', p.prediction_time) AS INTEGER) AS prediction_hour
 FROM predictions p
 LEFT JOIN locations l ON l.location_id = p.location_id;
 
-CREATE OR REPLACE VIEW vw_powerbi_location_analytics AS
+DROP VIEW IF EXISTS vw_powerbi_location_analytics;
+CREATE VIEW vw_powerbi_location_analytics AS
 SELECT
   l.location_id,
   l.site_name,
@@ -40,7 +42,8 @@ FROM solar_readings sr
 JOIN locations l ON l.location_id = sr.location_id
 GROUP BY l.location_id, l.site_name, l.latitude, l.longitude, DATE(sr.timestamp);
 
-CREATE OR REPLACE VIEW vw_powerbi_efficiency_reports AS
+DROP VIEW IF EXISTS vw_powerbi_efficiency_reports;
+CREATE VIEW vw_powerbi_efficiency_reports AS
 SELECT
   pv.output_id,
   pv.timestamp,
@@ -50,11 +53,12 @@ SELECT
   pv.energy_kwh,
   pv.efficiency_pct,
   DATE(pv.timestamp) AS output_date,
-  HOUR(pv.timestamp) AS output_hour
+  CAST(strftime('%H', pv.timestamp) AS INTEGER) AS output_hour
 FROM pv_output pv
 LEFT JOIN locations l ON l.location_id = pv.location_id;
 
-CREATE OR REPLACE VIEW vw_powerbi_historical_reports AS
+DROP VIEW IF EXISTS vw_powerbi_historical_reports;
+CREATE VIEW vw_powerbi_historical_reports AS
 SELECT
   sr.reading_id,
   sr.timestamp,
@@ -72,11 +76,12 @@ SELECT
   sr.dew_point_c,
   sr.uv_index,
   DATE(sr.timestamp) AS reading_date,
-  HOUR(sr.timestamp) AS reading_hour
+  CAST(strftime('%H', sr.timestamp) AS INTEGER) AS reading_hour
 FROM solar_readings sr
 LEFT JOIN locations l ON l.location_id = sr.location_id;
 
-CREATE OR REPLACE VIEW vw_powerbi_api_health AS
+DROP VIEW IF EXISTS vw_powerbi_api_health;
+CREATE VIEW vw_powerbi_api_health AS
 SELECT
   provider,
   DATE(created_at) AS log_date,
@@ -88,7 +93,8 @@ SELECT
 FROM api_request_logs
 GROUP BY provider, DATE(created_at);
 
-CREATE OR REPLACE VIEW vw_powerbi_model_performance AS
+DROP VIEW IF EXISTS vw_powerbi_model_performance;
+CREATE VIEW vw_powerbi_model_performance AS
 SELECT
   model_id,
   model_name,

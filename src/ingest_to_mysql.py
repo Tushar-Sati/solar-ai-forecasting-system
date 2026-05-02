@@ -16,7 +16,8 @@ WHAT IT DOES:
 
 import os
 import pandas as pd
-import pymysql
+import sqlite3
+from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -26,8 +27,7 @@ load_dotenv()
 # ─── DATABASE CONNECTION ──────────────────────────────────────────────────────
 def get_connection():
     """Returns a live MySQL connection using .env credentials."""
-    return pymysql.connect(
-        host     = os.getenv("DB_HOST",     "localhost"),
+    return sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
         user     = os.getenv("DB_USER",     "root"),
         password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
         database = os.getenv("DB_NAME",     "solar_forecast_db"),
@@ -45,7 +45,7 @@ def insert_location(conn, site_name, lat, lon):
     with conn.cursor() as cur:
         # Check if already exists
         cur.execute(
-            "SELECT location_id FROM locations WHERE site_name = %s",
+            "SELECT location_id FROM locations WHERE site_name = ?",
             (site_name,)
         )
         row = cur.fetchone()
@@ -55,7 +55,7 @@ def insert_location(conn, site_name, lat, lon):
 
         cur.execute(
             """INSERT INTO locations (site_name, latitude, longitude, data_source)
-               VALUES (%s, %s, %s, %s)""",
+               VALUES (?, ?, ?, ?)""",
             (site_name, lat, lon, "Open-Meteo")
         )
         conn.commit()
@@ -83,7 +83,7 @@ def bulk_insert_readings(conn, df, location_id, batch_size=500):
         INSERT INTO solar_readings
             (location_id, timestamp, {', '.join(use_cols)})
         VALUES
-            ({location_id}, %s, {', '.join(['%s'] * len(use_cols))})
+            ({location_id}, ?, {', '.join(['?'] * len(use_cols))})
     """
 
     rows_inserted = 0
@@ -120,7 +120,7 @@ def verify_insertion(conn, location_id):
     """Queries the DB to confirm data was inserted correctly."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) as cnt FROM solar_readings WHERE location_id = %s",
+            "SELECT COUNT(*) as cnt FROM solar_readings WHERE location_id = ?",
             (location_id,)
         )
         count = cur.fetchone()["cnt"]
@@ -128,7 +128,7 @@ def verify_insertion(conn, location_id):
         cur.execute(
             """SELECT MIN(timestamp) as first_ts, MAX(timestamp) as last_ts,
                       AVG(ghi) as avg_ghi, MAX(ghi) as max_ghi
-               FROM solar_readings WHERE location_id = %s""",
+               FROM solar_readings WHERE location_id = ?""",
             (location_id,)
         )
         stats = cur.fetchone()

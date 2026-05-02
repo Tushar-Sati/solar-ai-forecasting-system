@@ -1,14 +1,8 @@
-import pymysql
+import sqlite3
+from pathlib import Path
 from werkzeug.security import generate_password_hash
 
-conn = pymysql.connect(
-    host='localhost',
-    user='root',
-    password='Siyaram@#2024',
-    database='solar_forecast_db',
-    charset='utf8mb4',
-    cursorclass=pymysql.cursors.DictCursor
-)
+conn = sqlite3.connect(str(Path(__file__).resolve().parent / "solar_forecast_db.sqlite3"))
 
 with conn.cursor() as cur:
     # Check existing users
@@ -19,7 +13,7 @@ with conn.cursor() as cur:
     if count == 0:
         cur.execute(
             """INSERT INTO users (full_name, email, password_hash, role, is_active)
-               VALUES (%s, %s, %s, 'admin', 1)""",
+               VALUES (?, ?, ?, 'admin', 1)""",
             ('Solar Admin', 'admin@solar.ai', generate_password_hash('admin123'))
         )
         conn.commit()
@@ -38,7 +32,7 @@ with conn.cursor() as cur:
             """INSERT INTO pv_system_configs
                (system_name, capacity_kw, panel_area_m2, panel_efficiency_pct,
                 loss_pct, inverter_efficiency_pct, is_default)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             ('My Solar System', 10.0, 65.0, 18.5, 14.0, 96.0, 1)
         )
         conn.commit()

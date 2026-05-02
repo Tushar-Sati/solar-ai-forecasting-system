@@ -36,7 +36,6 @@ protobuf==4.25.9
 pyarrow==24.0.0
 pycparser==3.0
 Pygments==2.20.0
-PyMySQL==1.1.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 requests==2.33.1
