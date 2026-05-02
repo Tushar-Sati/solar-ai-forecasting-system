@@ -3,11 +3,7 @@ venv_gpu/
 __pycache__/
 data/raw/
 data/processed/
-data/models/
 notebooks/
 *.csv
-*.pkl
-*.h5
-*.pt
 .env
 .vercel
