@@ -4,3 +4,4 @@ services:
     env: docker
     plan: free
     branch: main
+    healthCheckPath: /api/health

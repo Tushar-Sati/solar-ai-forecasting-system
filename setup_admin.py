@@ -1,10 +1,50 @@
+import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from werkzeug.security import generate_password_hash
 
-conn = sqlite3.connect(str(Path(__file__).resolve().parent / "solar_forecast_db.sqlite3"))
+PROJECT_ROOT = Path(__file__).resolve().parent
+db_path = Path(os.getenv("SQLITE_DB_PATH", "solar_forecast_db.sqlite3"))
+if not db_path.is_absolute():
+    db_path = PROJECT_ROOT / db_path
 
-with conn.cursor() as cur:
+conn = sqlite3.connect(str(db_path))
+conn.row_factory = sqlite3.Row
+
+with closing(conn.cursor()) as cur:
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS users (
+           user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+           full_name TEXT NOT NULL,
+           email TEXT NOT NULL UNIQUE,
+           password_hash TEXT NOT NULL,
+           role TEXT NOT NULL DEFAULT 'viewer',
+           is_active INTEGER NOT NULL DEFAULT 1,
+           last_login_at TEXT NULL,
+           created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+           updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS pv_system_configs (
+           config_id INTEGER PRIMARY KEY AUTOINCREMENT,
+           user_id INTEGER NULL,
+           location_id INTEGER NULL,
+           system_name TEXT NOT NULL,
+           capacity_kw REAL NOT NULL,
+           panel_area_m2 REAL NOT NULL,
+           panel_efficiency_pct REAL NOT NULL,
+           tilt_deg REAL NULL,
+           azimuth_deg REAL NULL,
+           loss_pct REAL NOT NULL DEFAULT 14.0,
+           inverter_efficiency_pct REAL NOT NULL DEFAULT 96.0,
+           is_default INTEGER NOT NULL DEFAULT 0,
+           created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+           updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+
     # Check existing users
     cur.execute('SELECT COUNT(*) as c FROM users')
     count = cur.fetchone()['c']

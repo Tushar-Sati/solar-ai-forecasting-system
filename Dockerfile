@@ -17,12 +17,12 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn
 # Copy the rest of the application
 COPY . .
 
-# Expose port (Render automatically maps the PORT environment variable)
+# Render injects PORT at runtime; the gunicorn command below binds to it.
 EXPOSE 5000
 
 # Reduce memory fragmentation
 ENV MALLOC_ARENA_MAX=2
 ENV TF_FORCE_GPU_ALLOW_GROWTH=true
 
-# Run the application using gunicorn with fewer threads to save memory
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "2", "--timeout", "120", "api.app:app"]
+# Run the application using gunicorn with fewer threads to save memory.
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 2 --timeout 120 --access-logfile - --error-logfile - api.app:app"]

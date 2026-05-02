@@ -1,15 +1,14 @@
 # Power BI Integration Plan
 
-Power BI is the reporting layer over MySQL. It should use SQL views maintained by the backend migration so reports stay live and consistent with the Flask dashboard.
+Power BI is the reporting layer over the app's SQLite database. It should use the reporting views maintained by the backend startup migration so reports stay consistent with the Flask dashboard.
 
 ## Data Source
 
 1. Open Power BI Desktop.
-2. Select `Get data` -> `MySQL database`.
-3. Server: your MySQL host, usually `localhost`.
-4. Database: `solar_forecast_db`.
-5. Choose Import mode for college demos or DirectQuery for near-live reports.
-6. Select the `vw_powerbi_*` views.
+2. Use an SQLite connector/ODBC driver, or export from the app views if your Power BI install does not include SQLite support.
+3. Database file: `solar_forecast_db.sqlite3` locally, or the path configured by `SQLITE_DB_PATH`.
+4. Choose Import mode for college demos.
+5. Select the `vw_powerbi_*` views.
 
 ## Reporting Views
 
@@ -64,17 +63,16 @@ Power BI is the reporting layer over MySQL. It should use SQL views maintained b
 
 ## Refresh
 
-- Import mode: configure scheduled refresh in Power BI Service with MySQL gateway credentials.
-- DirectQuery: visuals query MySQL directly, so indexes on `solar_readings.timestamp`, `predictions.prediction_time`, and log timestamps matter.
-- Keep Power BI credentials read-only. Create a MySQL user with `SELECT` access to the `vw_powerbi_*` views.
+- Import mode: refresh from the SQLite file used by the deployed app.
+- For Render persistence, attach a disk and set `SQLITE_DB_PATH` so Power BI always reads the same database file.
+- Keep reporting access read-only where possible.
 
 ## SQL Files
 
 Run or review:
 
 ```sql
-source sql/002_powerbi_views.sql;
+.read sql/002_powerbi_views.sql
 ```
 
-The Flask app also installs these views at startup when DB credentials are valid.
-
+The Flask app also installs these views at startup when the SQLite database is writable.

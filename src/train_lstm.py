@@ -11,6 +11,7 @@ NOTE: This takes 5-15 minutes depending on your CPU/GPU.
 """
 
 import os
+from contextlib import closing
 import numpy as np
 import joblib
 import json
@@ -26,6 +27,12 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCh
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def db_path() -> Path:
+    path = Path(os.getenv("SQLITE_DB_PATH", "solar_forecast_db.sqlite3"))
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 # Suppress TensorFlow info messages — only show warnings/errors
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -209,13 +216,8 @@ def save_and_register(model, metrics):
 
     # Register in MySQL
     try:
-        conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
-            user     = os.getenv("DB_USER", "root"),
-            password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
-            database = os.getenv("DB_NAME", "solar_forecast_db"),
-            charset  = "utf8mb4"
-        )
-        with conn.cursor() as cur:
+        conn = sqlite3.connect(str(db_path()))
+        with closing(conn.cursor()) as cur:
             hyperparams = json.dumps({
                 "layers": [128, 64, 32],
                 "dropout": 0.2,
@@ -238,9 +240,9 @@ def save_and_register(model, metrics):
             ))
         conn.commit()
         conn.close()
-        print("    Registered in MySQL model_registry")
+        print("    Registered in SQLite model_registry")
     except Exception as e:
-        print(f"    MySQL register skipped: {e}")
+        print(f"    SQLite register skipped: {e}")
 
 
 # ══════════════════════════════════════════════════════════

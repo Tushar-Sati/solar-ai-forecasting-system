@@ -20,6 +20,12 @@ from sklearn.model_selection import train_test_split
 from dotenv import load_dotenv
 
 load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def db_path() -> Path:
+    path = Path(os.getenv("SQLITE_DB_PATH", "solar_forecast_db.sqlite3"))
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 # ─── CONFIG ───────────────────────────────────────────────
 LOOKBACK     = 24    # hours of history LSTM looks back at
@@ -33,13 +39,8 @@ LOCATION_ID  = 1     # matches what we inserted in Phase 1
 # STEP 1 — Load from MySQL
 # ══════════════════════════════════════════════════════════
 def load_from_mysql():
-    print("\n[1/6] Loading data from MySQL...")
-    conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
-        user     = os.getenv("DB_USER", "root"),
-        password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
-        database = os.getenv("DB_NAME", "solar_forecast_db"),
-        charset  = "utf8mb4"
-    )
+    print("\n[1/6] Loading data from SQLite...")
+    conn = sqlite3.connect(str(db_path()))
     query = """
         SELECT timestamp, ghi, dni, dhi,
                temperature_c, humidity_pct,

@@ -13,8 +13,8 @@ import csv
 import json
 import os
 import secrets
-import sqlite3
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -26,7 +26,6 @@ from typing import Any, Callable
 
 import joblib
 import numpy as np
-import sqlite3
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -38,17 +37,30 @@ from werkzeug.utils import secure_filename
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
 
+
+def base_path_from_env(name: str, default: str) -> Path:
+    path = Path(os.getenv(name, default))
+    return path if path.is_absolute() else BASE_DIR / path
+
+
 app = Flask(__name__, static_folder=str(BASE_DIR / "dashboard"), static_url_path="")
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
-app.config["UPLOAD_FOLDER"] = str(BASE_DIR / os.getenv("UPLOAD_FOLDER", "uploads"))
+app.config["UPLOAD_FOLDER"] = str(base_path_from_env("UPLOAD_FOLDER", "uploads"))
 CORS(app)
 
-MODEL_DIR = BASE_DIR / os.getenv("MODEL_DIR", "data/models")
+MODEL_DIR = base_path_from_env("MODEL_DIR", "data/models")
+SQLITE_DB_FILE = base_path_from_env("SQLITE_DB_PATH", "solar_forecast_db.sqlite3")
 OPENWEATHERMAP_API_KEY = os.getenv("OPENWEATHERMAP_API_KEY") or os.getenv("OWM_API_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 APP_REFRESH_SECONDS = int(os.getenv("APP_REFRESH_SECONDS", "300"))
 ENSEMBLE_XGB_WEIGHT = float(os.getenv("ENSEMBLE_XGB_WEIGHT", "0.60"))
 GRID_EMISSION_FACTOR = float(os.getenv("GRID_EMISSION_FACTOR_KG_PER_KWH", "0.82"))
+ALLOW_SIMULATED_WEATHER_FALLBACK = os.getenv("ALLOW_SIMULATED_WEATHER_FALLBACK", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 ALLOWED_UPLOADS = {".csv", ".parquet", ".xlsx", ".xls"}
 MODEL_METRICS_CACHE: dict[str, Any] | None = None
@@ -93,11 +105,30 @@ class SQLiteCursorWrapper:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cursor.close()
     def execute(self, sql, params=()):
-        sql = sql.replace("AUTO_INCREMENT", "AUTOINCREMENT")
-        sql = sql.replace("INT AUTOINCREMENT", "INTEGER AUTOINCREMENT")
-        sql = sql.replace("BIGINT AUTOINCREMENT", "INTEGER AUTOINCREMENT")
+        sql = re.sub(
+            r"\b(?:BIGINT|INT)\s+AUTO_INCREMENT\s+PRIMARY\s+KEY\b",
+            "INTEGER PRIMARY KEY AUTOINCREMENT",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        sql = re.sub(r"\bAUTO_INCREMENT\b", "AUTOINCREMENT", sql, flags=re.IGNORECASE)
+        sql = re.sub(r"\bTINYINT\s*\(\s*1\s*\)", "INTEGER", sql, flags=re.IGNORECASE)
         sql = re.sub(r"ENUM\([^)]+\)", "TEXT", sql)
+        sql = re.sub(r"\s+ON\s+UPDATE\s+CURRENT_TIMESTAMP", "", sql, flags=re.IGNORECASE)
         sql = re.sub(r",\s*INDEX\s+\w+\s*\([^)]+\)", "", sql)
+        sql = re.sub(
+            r"NOW\(\)\s*-\s*INTERVAL\s*%s\s*DAY",
+            "datetime('now', '-' || %s || ' days')",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        sql = re.sub(
+            r"NOW\(\)\s*-\s*INTERVAL\s*\?\s*DAY",
+            "datetime('now', '-' || ? || ' days')",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        sql = re.sub(r"\bNOW\(\)", "CURRENT_TIMESTAMP", sql, flags=re.IGNORECASE)
         sql = sql.replace("%s", "?")
         if "SHOW COLUMNS FROM" in sql:
             match = re.search(r"SHOW COLUMNS FROM `?(\w+)`?", sql)
@@ -122,10 +153,8 @@ class SQLiteConnWrapper:
         self.conn.close()
 
 def get_db():
-    db_path = BASE_DIR / "solar_forecast_db.sqlite3"
-    import sqlite3
-    import re
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    SQLITE_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(SQLITE_DB_FILE), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return SQLiteConnWrapper(conn)
 
@@ -765,6 +794,8 @@ def fetch_nasa_power(lat: float, lon: float) -> dict[str, Any] | None:
 def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
     lat = float(location["lat"])
     lon = float(location["lon"])
+    provider_name = "Open-Meteo"
+    provider_warning = None
     hourly_vars = [
         "temperature_2m",
         "relative_humidity_2m",
@@ -821,7 +852,12 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
             },
         )
     except Exception as exc:
-        print(f"Open-Meteo failed: {exc}. Using simulated fallback payload.")
+        log_system("error", "weather", "Open-Meteo forecast request failed", {"error": str(exc)})
+        if not ALLOW_SIMULATED_WEATHER_FALLBACK:
+            raise RuntimeError(f"Open-Meteo forecast API failed: {exc}") from exc
+        provider_name = "Simulated Weather Fallback"
+        provider_warning = "Live Open-Meteo request failed; simulated weather is enabled for this deployment."
+        print(f"Open-Meteo failed: {exc}. Using explicitly enabled simulated fallback payload.")
         now = datetime.utcnow()
         times = [(now + timedelta(hours=i - 96)).isoformat()[:16] for i in range(24 * 11)]
         def sim_val(t_str, base, peak_hour, amplitude):
@@ -953,7 +989,8 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
     save_solar_reading(location_id, current_data)
 
     return {
-        "provider": "Open-Meteo",
+        "provider": provider_name,
+        "warning": provider_warning,
         "refresh_seconds": APP_REFRESH_SECONDS,
         "location_id": location_id,
         "location": {
@@ -1262,26 +1299,30 @@ def admin_page():
 @app.route("/api/health")
 def health():
     db_ok = False
+    schema_ok = False
     try:
         conn = get_db()
         conn.close()
         db_ok = True
+        schema_ok = bool(db_query_one("SELECT COUNT(*) AS count FROM locations") is not None)
     except Exception:
         db_ok = False
+        schema_ok = False
     return jsonify(
         {
             "status": "running",
             "timestamp": datetime.now().isoformat(),
             "refresh_seconds": APP_REFRESH_SECONDS,
-        "models": {
-            "xgboost": xgb_model is not None,
-            "lstm": lstm_model is not None,
-            "scaler": scaler is not None,
-            "features": len(feat_cols or []),
-            "xgb_type": str(type(xgb_model)),
-            "xgb_error": globals().get("xgb_error", "NO_ERROR_SET"),
-        },
+            "models": {
+                "xgboost": xgb_model is not None,
+                "lstm": lstm_model is not None,
+                "scaler": scaler is not None,
+                "features": len(feat_cols or []),
+                "xgb_type": str(type(xgb_model)),
+                "xgb_error": globals().get("xgb_error", "NO_ERROR_SET"),
+            },
             "database": db_ok,
+            "schema": schema_ok,
             "providers": {
                 "primary": ["Open-Meteo"],
                 "enrichment": ["NASA POWER"],
@@ -1289,6 +1330,7 @@ def health():
                     "openweathermap": bool(OPENWEATHERMAP_API_KEY),
                     "weatherapi": bool(WEATHERAPI_KEY),
                 },
+                "simulated_fallback_enabled": ALLOW_SIMULATED_WEATHER_FALLBACK,
             },
         }
     )
@@ -1795,12 +1837,11 @@ def admin_stats(user):
 def powerbi_views():
     rows = db_query_all(
         """
-        SELECT TABLE_NAME AS view_name
-        FROM information_schema.VIEWS
-        WHERE TABLE_SCHEMA=%s AND TABLE_NAME LIKE 'vw_powerbi_%%'
-        ORDER BY TABLE_NAME
-        """,
-        (os.getenv("DB_NAME", "solar_forecast_db"),),
+        SELECT name AS view_name
+        FROM sqlite_master
+        WHERE type='view' AND name LIKE 'vw_powerbi_%'
+        ORDER BY name
+        """
     )
     return jsonify({"status": "success", "views": to_jsonable(rows)})
 

@@ -8,6 +8,7 @@ HOW TO RUN:
 """
 
 import os
+from contextlib import closing
 import numpy as np
 import joblib
 import json
@@ -20,6 +21,12 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def db_path() -> Path:
+    path = Path(os.getenv("SQLITE_DB_PATH", "solar_forecast_db.sqlite3"))
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 # ══════════════════════════════════════════════════════════
@@ -139,13 +146,8 @@ def save_and_register(model, metrics, feat_cols):
 
     # Register in MySQL model_registry table
     try:
-        conn = sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
-            user     = os.getenv("DB_USER", "root"),
-            password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
-            database = os.getenv("DB_NAME", "solar_forecast_db"),
-            charset  = "utf8mb4"
-        )
-        with conn.cursor() as cur:
+        conn = sqlite3.connect(str(db_path()))
+        with closing(conn.cursor()) as cur:
             hyperparams = json.dumps({
                 "n_estimators": 500, "max_depth": 6,
                 "learning_rate": 0.05, "subsample": 0.8
@@ -163,9 +165,9 @@ def save_and_register(model, metrics, feat_cols):
             ))
         conn.commit()
         conn.close()
-        print("    Registered  : model_registry table in MySQL")
+        print("    Registered  : model_registry table in SQLite")
     except Exception as e:
-        print(f"    MySQL register skipped: {e}")
+        print(f"    SQLite register skipped: {e}")
 
 
 # ══════════════════════════════════════════════════════════

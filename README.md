@@ -1,6 +1,6 @@
 # AI-Powered Solar Energy Forecasting and Analytics Platform
 
-Production-style Flask + MySQL + vanilla JS platform for live solar/weather analytics and AI-based irradiance forecasting.
+Production-style Flask + SQLite + vanilla JS platform for live solar/weather analytics and AI-based irradiance forecasting.
 
 ## Folder Structure
 
@@ -8,7 +8,8 @@ Production-style Flask + MySQL + vanilla JS platform for live solar/weather anal
 - `dashboard/` - Static user and admin dashboards served by Flask.
 - `data/models/` - Existing trained LSTM/XGBoost/scaler artifacts.
 - `src/` - Data download, preprocessing, and model training scripts.
-- `sql/001_platform_schema.sql` - MySQL schema migration reference.
+- `solar_forecast_db.sqlite3` - local SQLite database file created/populated at runtime.
+- `sql/001_platform_schema.sql` - legacy MySQL schema migration reference.
 - `sql/002_powerbi_views.sql` - Power BI reporting views.
 - `powerbi/` - Power BI project file location.
 
@@ -22,19 +23,19 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-2. Copy `.env.example` to `.env` and fill in MySQL/admin values:
+2. Copy `.env.example` to `.env` and fill in admin/deployment values:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-3. Make sure MySQL database `solar_forecast_db` exists, then run the app:
+3. Run the app:
 
 ```powershell
 python api/app.py
 ```
 
-The backend creates missing platform tables and Power BI views at startup. Open:
+The backend creates missing SQLite tables and Power BI views at startup. Open:
 
 - User dashboard: `http://localhost:5000`
 - Forecasts: `http://localhost:5000/forecast.html`
@@ -69,11 +70,11 @@ The backend reuses existing artifacts:
 - `data/models/feature_cols.pkl`
 - `data/models/y_max.pkl`
 
-`/api/predict` accepts a location, fetches live hourly data, builds the 23 trained features including lag/rolling features from real provider data, runs XGBoost and LSTM, then stores the ensemble prediction in MySQL.
+`/api/predict` accepts a location, fetches live hourly data, builds the 23 trained features including lag/rolling features from real provider data, runs XGBoost and LSTM, then stores the ensemble prediction in SQLite.
 
 ## Power BI
 
-Power BI should connect directly to MySQL, not static CSV exports. See [docs/POWERBI.md](docs/POWERBI.md).
+Power BI can use the SQLite-backed reporting views exposed by the app. See [docs/POWERBI.md](docs/POWERBI.md).
 
 Use these views from `sql/002_powerbi_views.sql`:
 
@@ -88,6 +89,7 @@ Use these views from `sql/002_powerbi_views.sql`:
 
 - Use a real `SECRET_KEY`.
 - Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before first startup or create the first admin through bootstrap.
-- Run Flask behind a production WSGI server for deployment.
-- Configure MySQL backups and Power BI scheduled refresh credentials.
+- On Render, keep the Docker deployment and let the container bind to Render's `PORT` environment variable.
+- For persistent Render data, attach a disk and set `SQLITE_DB_PATH` to a path on that disk, for example `/var/data/solar_forecast_db.sqlite3`.
+- Keep `ALLOW_SIMULATED_WEATHER_FALLBACK=false` for real forecasts. Only set it to `true` for an offline demo.
 - Keep model artifacts under `data/models/` and restrict upload access to admins.

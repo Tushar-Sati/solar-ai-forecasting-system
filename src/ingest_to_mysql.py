@@ -15,6 +15,7 @@ WHAT IT DOES:
 """
 
 import os
+from contextlib import closing
 import pandas as pd
 import sqlite3
 from pathlib import Path
@@ -22,18 +23,20 @@ from dotenv import load_dotenv
 from datetime import datetime
 
 load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def db_path() -> Path:
+    path = Path(os.getenv("SQLITE_DB_PATH", "solar_forecast_db.sqlite3"))
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 # ─── DATABASE CONNECTION ──────────────────────────────────────────────────────
 def get_connection():
-    """Returns a live MySQL connection using .env credentials."""
-    return sqlite3.connect(str(Path(__file__).resolve().parents[1] / "solar_forecast_db.sqlite3")),
-        user     = os.getenv("DB_USER",     "root"),
-        password = os.getenv("DB_PASSWORD", "Siyaram@#2024"),
-        database = os.getenv("DB_NAME",     "solar_forecast_db"),
-        charset  = "utf8mb4",
-        cursorclass = pymysql.cursors.DictCursor
-    )
+    """Returns the app SQLite connection."""
+    conn = sqlite3.connect(str(db_path()))
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def insert_location(conn, site_name, lat, lon):
@@ -42,7 +45,7 @@ def insert_location(conn, site_name, lat, lon):
     Returns the location_id for use in solar_readings FK.
     Skips insert if the site already exists (safe to re-run).
     """
-    with conn.cursor() as cur:
+    with closing(conn.cursor()) as cur:
         # Check if already exists
         cur.execute(
             "SELECT location_id FROM locations WHERE site_name = ?",
@@ -89,7 +92,7 @@ def bulk_insert_readings(conn, df, location_id, batch_size=500):
     rows_inserted = 0
     total = len(df)
 
-    with conn.cursor() as cur:
+    with closing(conn.cursor()) as cur:
         batch = []
         for _, row in df.iterrows():
             values = [str(row["timestamp"])] + [
@@ -118,7 +121,7 @@ def bulk_insert_readings(conn, df, location_id, batch_size=500):
 
 def verify_insertion(conn, location_id):
     """Queries the DB to confirm data was inserted correctly."""
-    with conn.cursor() as cur:
+    with closing(conn.cursor()) as cur:
         cur.execute(
             "SELECT COUNT(*) as cnt FROM solar_readings WHERE location_id = ?",
             (location_id,)
