@@ -88,6 +88,10 @@ print("Model startup complete.\n")
 class SQLiteCursorWrapper:
     def __init__(self, cursor):
         self.cursor = cursor
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cursor.close()
     def execute(self, sql, params=()):
         sql = sql.replace("AUTO_INCREMENT", "AUTOINCREMENT")
         sql = sql.replace("INT AUTOINCREMENT", "INTEGER AUTOINCREMENT")
