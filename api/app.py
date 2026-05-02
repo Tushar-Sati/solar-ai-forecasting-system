@@ -1366,6 +1366,18 @@ def calculate_power(ghi: float, pv_config: dict[str, Any] | None) -> dict[str, A
     }
 
 
+def unavailable_power_result(message: str, pv_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "configured": bool(pv_config),
+        "pv_config_id": pv_config.get("config_id") if pv_config else None,
+        "dc_power_kw": None,
+        "estimated_power_kw": None,
+        "co2_offset_kg": None,
+        "efficiency_pct": None,
+        "message": message,
+    }
+
+
 def get_model_metrics() -> dict[str, Any]:
     global MODEL_METRICS_CACHE
     if MODEL_METRICS_CACHE:
@@ -1434,6 +1446,50 @@ def run_live_prediction(weather: dict[str, Any]) -> dict[str, Any]:
     metrics = get_model_metrics()
     predictions["confidence_score"] = confidence_from_metrics(predictions, metrics)
     return {"predictions": predictions, "metrics": metrics}
+
+
+def prediction_inputs_available(weather: dict[str, Any]) -> bool:
+    hourly = weather.get("raw_hourly") or {}
+    times = hourly.get("time") or []
+    idx = int(weather.get("current_hour_index") or 0)
+    return idx >= 48 and idx < len(times)
+
+
+def unavailable_prediction_response(
+    weather_bundle: dict[str, Any],
+    pv_config: dict[str, Any] | None,
+    message: str,
+):
+    log_system(
+        "warning",
+        "prediction",
+        "Prediction unavailable because live hourly model inputs are incomplete",
+        {
+            "provider": weather_bundle.get("provider"),
+            "warning": weather_bundle.get("warning"),
+            "location_id": weather_bundle.get("location_id"),
+            "message": message,
+        },
+    )
+    prediction_result = {
+        "xgboost": None,
+        "lstm": None,
+        "ensemble": None,
+        "confidence_score": None,
+    }
+    return jsonify(
+        {
+            "status": "success",
+            "prediction_id": None,
+            "warning": message,
+            "location": to_jsonable(weather_bundle.get("location")),
+            "current": to_jsonable(weather_bundle.get("current")),
+            "predictions": prediction_result,
+            "power": unavailable_power_result(message, pv_config),
+            "metrics": {},
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
 
 
 def store_prediction(
@@ -1625,8 +1681,17 @@ def predict():
         body = request.get_json(silent=True) or {}
         location = resolve_location(body)
         weather_bundle = fetch_weather_bundle(location)
-        prediction_result = run_live_prediction(weather_bundle)
         pv_config = get_default_pv_config(weather_bundle["location_id"])
+        unavailable_message = (
+            weather_bundle.get("warning")
+            or "Prediction is temporarily unavailable because live hourly weather history is incomplete."
+        )
+        if not prediction_inputs_available(weather_bundle):
+            return unavailable_prediction_response(weather_bundle, pv_config, unavailable_message)
+        try:
+            prediction_result = run_live_prediction(weather_bundle)
+        except ValueError as exc:
+            return unavailable_prediction_response(weather_bundle, pv_config, str(exc))
         ghi_for_power = prediction_result["predictions"]["ensemble"]
         power_result = calculate_power(ghi_for_power, pv_config)
         prediction_id = store_prediction(weather_bundle, prediction_result, power_result, pv_config)
