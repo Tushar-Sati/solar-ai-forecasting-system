@@ -9,6 +9,7 @@ paths are exposed.
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 import os
@@ -517,22 +518,183 @@ def log_system(
         pass
 
 
-FETCH_CACHE = {}
+FETCH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+WEATHER_BUNDLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+WEATHER_CACHE_SECONDS = 600
 
-def fetch_json(provider: str, url: str, params: dict[str, Any], timeout: int = 18) -> dict[str, Any]:
+
+class RateLimitError(RuntimeError):
+    def __init__(self, provider: str, url: str, status_code: int):
+        self.provider = provider
+        self.url = url
+        self.status_code = status_code
+        super().__init__(f"{provider} returned HTTP {status_code}: Too Many Requests")
+
+
+def prepared_url(url: str, params: dict[str, Any]) -> str:
+    return requests.Request("GET", url, params=params).prepare().url or url
+
+
+def weather_cache_key(lat: float, lon: float) -> str:
+    return f"{round(float(lat), 4):.4f},{round(float(lon), 4):.4f}"
+
+
+def cache_weather_bundle(lat: float, lon: float, bundle: dict[str, Any]) -> None:
+    key = weather_cache_key(lat, lon)
+    WEATHER_BUNDLE_CACHE[key] = (time.time(), copy.deepcopy(bundle))
+    log_system("info", "weather-cache", "Stored Open-Meteo weather bundle", {"cache_key": key})
+
+
+def cached_weather_bundle(lat: float, lon: float, allow_stale: bool = False) -> dict[str, Any] | None:
+    key = weather_cache_key(lat, lon)
+    entry = WEATHER_BUNDLE_CACHE.get(key)
+    if not entry:
+        log_system("info", "weather-cache", "Weather cache miss", {"cache_key": key})
+        print(f"Weather cache miss: {key}")
+        return None
+
+    cached_at, bundle = entry
+    age_seconds = int(time.time() - cached_at)
+    if age_seconds <= WEATHER_CACHE_SECONDS or allow_stale:
+        state = "hit" if age_seconds <= WEATHER_CACHE_SECONDS else "stale-hit"
+        log_system(
+            "info",
+            "weather-cache",
+            f"Weather cache {state}",
+            {"cache_key": key, "age_seconds": age_seconds},
+        )
+        print(f"Weather cache {state}: {key}, age={age_seconds}s")
+        cached = copy.deepcopy(bundle)
+        if allow_stale and age_seconds > WEATHER_CACHE_SECONDS:
+            cached["warning"] = (
+                "Live Open-Meteo is temporarily rate limited. Showing the most recent cached weather data."
+            )
+        return cached
+
+    log_system(
+        "info",
+        "weather-cache",
+        "Weather cache expired",
+        {"cache_key": key, "age_seconds": age_seconds},
+    )
+    print(f"Weather cache expired: {key}, age={age_seconds}s")
+    return None
+
+
+def weather_warning_bundle(
+    location: dict[str, Any],
+    lat: float,
+    lon: float,
+    warning: str,
+    data_source: str,
+    log_message: str,
+    log_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        location_id = upsert_location(location, data_source=data_source)
+    except Exception as db_exc:
+        log_system("warning", "weather", "Could not store weather fallback location", {"error": str(db_exc)})
+        location_id = None
+
+    context = {"lat": lat, "lon": lon}
+    context.update(log_context or {})
+    log_system(
+        "warning",
+        "weather",
+        log_message,
+        context,
+    )
+    current_data = {
+        "time": datetime.now().isoformat(timespec="minutes"),
+        "temperature_c": None,
+        "feels_like_c": None,
+        "humidity_pct": None,
+        "dew_point_c": None,
+        "pressure_hpa": None,
+        "wind_speed_ms": None,
+        "wind_direction_deg": None,
+        "cloud_cover_pct": None,
+        "uv_index": None,
+        "ghi": None,
+        "dni": None,
+        "dhi": None,
+        "global_tilted_irradiance": None,
+        "precipitation_mm": None,
+        "is_day": None,
+        "weather_code": None,
+        "description": warning,
+    }
+    return {
+        "provider": "Open-Meteo",
+        "warning": warning,
+        "refresh_seconds": APP_REFRESH_SECONDS,
+        "location_id": location_id,
+        "location": {
+            **location,
+            "site_name": site_name(location),
+            "timezone": location.get("timezone"),
+            "elevation_m": location.get("elevation_m"),
+        },
+        "current": current_data,
+        "hourly": [],
+        "daily": [],
+        "nasa_power": None,
+        "raw_hourly": {},
+        "current_hour_index": 0,
+        "fetched_at": datetime.now().isoformat(),
+    }
+
+
+def rate_limited_weather_bundle(location: dict[str, Any], lat: float, lon: float, exc: RateLimitError) -> dict[str, Any]:
+    warning = (
+        "Live Open-Meteo weather is temporarily rate limited from this deployment. "
+        "Please try again in a few minutes."
+    )
+    return weather_warning_bundle(
+        location,
+        lat,
+        lon,
+        warning,
+        "Open-Meteo rate limited",
+        "Open-Meteo rate limited and no cached bundle was available",
+        {"url": exc.url, "status_code": exc.status_code},
+    )
+
+
+def fetch_json(provider: str, url: str, params: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
     global FETCH_CACHE
+    request_url = prepared_url(url, params)
     cache_key = f"{url}?{json_dumps(params)}"
     now = time.time()
-    
+
     # Check cache (valid for 10 minutes) to avoid 429 Rate Limit
     if cache_key in FETCH_CACHE:
         cached_time, cached_payload = FETCH_CACHE[cache_key]
-        if now - cached_time < 600:
+        age_seconds = int(now - cached_time)
+        if age_seconds < WEATHER_CACHE_SECONDS:
+            log_system(
+                "info",
+                "api-cache",
+                "External API cache hit",
+                {"provider": provider, "url": request_url, "age_seconds": age_seconds},
+            )
+            print(f"External API cache hit: provider={provider}, url={request_url}, age={age_seconds}s")
             return cached_payload
+        log_system(
+            "info",
+            "api-cache",
+            "External API cache expired",
+            {"provider": provider, "url": request_url, "age_seconds": age_seconds},
+        )
+        print(f"External API cache expired: provider={provider}, url={request_url}, age={age_seconds}s")
+    else:
+        log_system("info", "api-cache", "External API cache miss", {"provider": provider, "url": request_url})
+        print(f"External API cache miss: provider={provider}, url={request_url}")
 
     started = time.perf_counter()
     status_code = None
     try:
+        print(f"External API request: provider={provider}, url={request_url}")
         response = requests.get(
             url,
             params=params,
@@ -540,6 +702,9 @@ def fetch_json(provider: str, url: str, params: dict[str, Any], timeout: int = 1
             headers={"User-Agent": "SolarAIPlatform/1.0"},
         )
         status_code = response.status_code
+        print(f"External API response: provider={provider}, status={status_code}, url={response.url}")
+        if status_code == 429:
+            raise RateLimitError(provider, response.url, status_code)
         response.raise_for_status()
         payload = response.json()
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -554,11 +719,45 @@ def fetch_json(provider: str, url: str, params: dict[str, Any], timeout: int = 1
         )
         FETCH_CACHE[cache_key] = (now, payload)
         return payload
+    except RateLimitError as exc:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        log_api_request(provider, url, params, exc.status_code, latency_ms, False, error_message=str(exc))
+        log_system(
+            "warning",
+            "api",
+            "External API rate limited",
+            {"provider": provider, "url": exc.url, "status_code": exc.status_code, "latency_ms": latency_ms},
+        )
+        print(f"External API rate limited: provider={provider}, status={exc.status_code}, url={exc.url}")
+        if cache_key in FETCH_CACHE:
+            cached_time, cached_payload = FETCH_CACHE[cache_key]
+            if provider == "Open-Meteo Forecast":
+                print(
+                    "External API stale cache available after 429; "
+                    f"weather bundle cache will handle response: provider={provider}, age={int(now - cached_time)}s"
+                )
+                raise
+            print(f"External API stale cache returned after 429: provider={provider}, age={int(now - cached_time)}s")
+            return cached_payload
+        raise
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         log_api_request(provider, url, params, status_code, latency_ms, False, error_message=str(exc))
-        # If rate limited, return cached payload if available (even if expired)
+        log_system(
+            "error",
+            "api",
+            "External API request failed",
+            {"provider": provider, "url": request_url, "status_code": status_code, "error": str(exc)},
+        )
+        print(
+            f"External API exception: provider={provider}, status={status_code}, "
+            f"url={request_url}, error={exc}"
+        )
+        # If provider fails, return cached payload if available (even if expired)
         if cache_key in FETCH_CACHE:
+            if provider == "Open-Meteo Forecast":
+                print("External API stale cache available after failure; weather bundle cache will handle response")
+                raise
             return FETCH_CACHE[cache_key][1]
         raise
 
@@ -777,7 +976,7 @@ def fetch_nasa_power(lat: float, lon: float) -> dict[str, Any] | None:
                 "end": day,
                 "format": "JSON",
             },
-            timeout=25,
+            timeout=10,
         )
         params = (payload.get("properties") or {}).get("parameter") or {}
         latest: dict[str, Any] = {}
@@ -794,6 +993,10 @@ def fetch_nasa_power(lat: float, lon: float) -> dict[str, Any] | None:
 def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
     lat = float(location["lat"])
     lon = float(location["lon"])
+    cached = cached_weather_bundle(lat, lon)
+    if cached:
+        return cached
+
     provider_name = "Open-Meteo"
     provider_warning = None
     hourly_vars = [
@@ -851,10 +1054,32 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
                 "forecast_days": 7,
             },
         )
+    except RateLimitError as exc:
+        cached = cached_weather_bundle(lat, lon, allow_stale=True)
+        if cached:
+            cached["warning"] = (
+                "Live Open-Meteo is temporarily rate limited. Showing cached weather data."
+            )
+            return cached
+        return rate_limited_weather_bundle(location, lat, lon, exc)
     except Exception as exc:
         log_system("error", "weather", "Open-Meteo forecast request failed", {"error": str(exc)})
+        cached = cached_weather_bundle(lat, lon, allow_stale=True)
+        if cached:
+            cached["warning"] = (
+                "Live Open-Meteo is temporarily unavailable. Showing cached weather data."
+            )
+            return cached
         if not ALLOW_SIMULATED_WEATHER_FALLBACK:
-            raise RuntimeError(f"Open-Meteo forecast API failed: {exc}") from exc
+            return weather_warning_bundle(
+                location,
+                lat,
+                lon,
+                "Live Open-Meteo weather is temporarily unavailable. Please try again in a few minutes.",
+                "Open-Meteo unavailable",
+                "Open-Meteo forecast request failed and no cached bundle was available",
+                {"error": str(exc)},
+            )
         provider_name = "Simulated Weather Fallback"
         provider_warning = "Live Open-Meteo request failed; simulated weather is enabled for this deployment."
         print(f"Open-Meteo failed: {exc}. Using explicitly enabled simulated fallback payload.")
@@ -988,7 +1213,7 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
     )
     save_solar_reading(location_id, current_data)
 
-    return {
+    bundle = {
         "provider": provider_name,
         "warning": provider_warning,
         "refresh_seconds": APP_REFRESH_SECONDS,
@@ -1007,6 +1232,9 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
         "current_hour_index": idx,
         "fetched_at": datetime.now().isoformat(),
     }
+    if provider_name == "Open-Meteo":
+        cache_weather_bundle(lat, lon, bundle)
+    return bundle
 
 
 def save_solar_reading(location_id: int, current_data: dict[str, Any]) -> None:
@@ -1383,9 +1611,12 @@ def weather():
         bundle = fetch_weather_bundle(location)
         public_bundle = {k: v for k, v in bundle.items() if k not in {"raw_hourly", "current_hour_index"}}
         return jsonify({"status": "success", "data": to_jsonable(public_bundle)})
+    except ValueError as exc:
+        log_system("warning", "weather", "Invalid weather request", {"error": str(exc)})
+        return bad_request(str(exc), 400)
     except Exception as exc:
         log_system("error", "weather", "Weather request failed", {"error": str(exc)})
-        return bad_request(str(exc), 502)
+        return bad_request("Weather service is temporarily unavailable. Please try again in a few minutes.", 503)
 
 
 @app.route("/api/predict", methods=["POST"])
