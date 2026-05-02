@@ -1213,8 +1213,8 @@ def health():
             "lstm": lstm_model is not None,
             "scaler": scaler is not None,
             "features": len(feat_cols or []),
-            "lstm_error": globals().get("lstm_error"),
-            "xgb_error": globals().get("xgb_error"),
+            "xgb_type": str(type(xgb_model)),
+            "xgb_error": globals().get("xgb_error", "NO_ERROR_SET"),
         },
             "database": db_ok,
             "providers": {
