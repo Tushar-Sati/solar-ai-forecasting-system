@@ -1039,6 +1039,66 @@ def nasa_time_key_to_iso(value: str) -> str | None:
     return f"{value[0:4]}-{value[4:6]}-{value[6:8]}T{value[8:10]}:00"
 
 
+def estimate_cloud_cover_from_humidity(humidity_pct: float) -> float:
+    return clamp_number((humidity_pct - 45.0) * 1.6, 0.0, 85.0)
+
+
+def estimate_solar_components(lat: float, lon: float, iso_time: str, cloud_cover_pct: float) -> dict[str, float]:
+    dt = parse_dt(iso_time)
+    if not dt:
+        return {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "gti": 0.0, "uv_index": 0.0}
+
+    hour = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+    day_of_year = dt.timetuple().tm_yday
+    gamma = 2.0 * np.pi / 365.0 * (day_of_year - 1 + (hour - 12.0) / 24.0)
+    declination = (
+        0.006918
+        - 0.399912 * np.cos(gamma)
+        + 0.070257 * np.sin(gamma)
+        - 0.006758 * np.cos(2 * gamma)
+        + 0.000907 * np.sin(2 * gamma)
+        - 0.002697 * np.cos(3 * gamma)
+        + 0.00148 * np.sin(3 * gamma)
+    )
+    equation_of_time = 229.18 * (
+        0.000075
+        + 0.001868 * np.cos(gamma)
+        - 0.032077 * np.sin(gamma)
+        - 0.014615 * np.cos(2 * gamma)
+        - 0.040849 * np.sin(2 * gamma)
+    )
+    true_solar_time = (dt.hour * 60.0 + dt.minute + dt.second / 60.0 + equation_of_time + 4.0 * lon) % 1440
+    hour_angle = np.radians(true_solar_time / 4.0 - 180.0)
+    lat_rad = np.radians(lat)
+    cos_zenith = float(
+        np.sin(lat_rad) * np.sin(declination)
+        + np.cos(lat_rad) * np.cos(declination) * np.cos(hour_angle)
+    )
+    if cos_zenith <= 0:
+        return {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "gti": 0.0, "uv_index": 0.0}
+
+    zenith_deg = np.degrees(np.arccos(clamp_number(cos_zenith, -1.0, 1.0)))
+    air_mass = 1.0 / (cos_zenith + 0.50572 * ((96.07995 - zenith_deg) ** -1.6364))
+    air_mass = clamp_number(float(air_mass), 1.0, 8.0)
+    extraterrestrial = 1367.0 * (1.0 + 0.033 * np.cos(2.0 * np.pi * day_of_year / 365.0))
+    clear_dni = extraterrestrial * (0.7 ** (air_mass ** 0.678))
+    clear_dhi = 0.12 * extraterrestrial * cos_zenith
+    clear_ghi = clear_dni * cos_zenith + clear_dhi
+    cloud_fraction = clamp_number(cloud_cover_pct, 0.0, 100.0) / 100.0
+    cloud_factor = clamp_number(1.0 - 0.72 * (cloud_fraction ** 1.7), 0.18, 1.0)
+    ghi_value = max(0.0, clear_ghi * cloud_factor)
+    diffuse_fraction = clamp_number(0.16 + 0.48 * cloud_fraction, 0.14, 0.78)
+    dhi_value = ghi_value * diffuse_fraction
+    dni_value = max(0.0, (ghi_value - dhi_value) / max(cos_zenith, 0.08))
+    return {
+        "ghi": round(ghi_value, 3),
+        "dni": round(min(dni_value, 1100.0), 3),
+        "dhi": round(dhi_value, 3),
+        "gti": round(ghi_value * 1.05, 3),
+        "uv_index": round(min(12.0, 11.0 * cos_zenith * cloud_factor), 3),
+    }
+
+
 def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
     end = datetime.utcnow() - timedelta(days=3)
     start = end - timedelta(days=5)
@@ -1070,6 +1130,21 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
     if len(keys) < 49:
         raise ValueError("NASA POWER returned too few hourly points for model lag features.")
 
+    raw_times = [nasa_time_key_to_iso(str(key)) for key in keys]
+    raw_times = [time_value for time_value in raw_times if time_value]
+    current_utc_hour = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    latest_day = raw_times[-1][:10]
+    target_raw_time = f"{latest_day}T{current_utc_hour.hour:02d}:00"
+    reference_idx = raw_times.index(target_raw_time) if target_raw_time in raw_times else len(raw_times) - 1
+    reference_dt = parse_dt(raw_times[reference_idx])
+    shift_hours = int(round((current_utc_hour - reference_dt).total_seconds() / 3600.0)) if reference_dt else 0
+    projected_times = [
+        (parse_dt(time_value) + timedelta(hours=shift_hours)).isoformat(timespec="minutes")
+        if parse_dt(time_value)
+        else time_value
+        for time_value in raw_times
+    ]
+
     def series(name: str, key: str) -> float | None:
         values = params.get(name) or {}
         return clean_nasa_value(values.get(key))
@@ -1085,23 +1160,18 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
     ghi: list[float] = []
     dni: list[float] = []
     dhi: list[float] = []
+    global_tilted: list[float] = []
 
     last_temp = 25.0
     last_humidity = 50.0
     last_pressure = 1013.0
     last_wind = 2.0
-    for key in keys:
-        iso_time = nasa_time_key_to_iso(str(key))
+    estimated_solar_count = 0
+    for i, key in enumerate(keys):
+        iso_time = projected_times[i] if i < len(projected_times) else nasa_time_key_to_iso(str(key))
         if not iso_time:
             continue
         times.append(iso_time)
-
-        ghi_value = max(0.0, series("ALLSKY_SFC_SW_DWN", key) or 0.0)
-        clear_sky = max(ghi_value, series("CLRSKY_SFC_SW_DWN", key) or ghi_value)
-        if clear_sky > 0:
-            cloud_value = clamp_number(100.0 * (1.0 - min(ghi_value / clear_sky, 1.0)), 0.0, 100.0)
-        else:
-            cloud_value = 0.0
 
         temp_value = series("T2M", key)
         if temp_value is None:
@@ -1130,8 +1200,36 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
         if dew_value is None:
             dew_value = estimate_dew_point_c(temp_value, humidity_value)
 
-        direct_value = max(0.0, ghi_value * (1.0 - 0.75 * (cloud_value / 100.0)))
-        diffuse_value = max(0.0, ghi_value - direct_value * 0.70)
+        raw_ghi = series("ALLSKY_SFC_SW_DWN", key)
+        raw_clear_sky = series("CLRSKY_SFC_SW_DWN", key)
+        if raw_ghi is None:
+            cloud_value = estimate_cloud_cover_from_humidity(humidity_value)
+            solar = estimate_solar_components(lat, lon, iso_time, cloud_value)
+            ghi_value = solar["ghi"]
+            direct_value = solar["dni"]
+            diffuse_value = solar["dhi"]
+            tilted_value = solar["gti"]
+            estimated_solar_count += 1
+        else:
+            ghi_value = max(0.0, raw_ghi)
+            clear_sky = max(ghi_value, raw_clear_sky or ghi_value)
+            if clear_sky > 0:
+                cloud_value = clamp_number(100.0 * (1.0 - min(ghi_value / clear_sky, 1.0)), 0.0, 100.0)
+            else:
+                cloud_value = estimate_cloud_cover_from_humidity(humidity_value)
+            solar_shape = estimate_solar_components(lat, lon, iso_time, cloud_value)
+            if solar_shape["ghi"] > 0 and ghi_value > 0:
+                scale = ghi_value / solar_shape["ghi"]
+                direct_value = min(1100.0, solar_shape["dni"] * scale)
+                diffuse_value = solar_shape["dhi"] * scale
+                tilted_value = solar_shape["gti"] * scale
+            else:
+                direct_value = max(0.0, ghi_value * (1.0 - 0.75 * (cloud_value / 100.0)))
+                diffuse_value = max(0.0, ghi_value - direct_value * 0.70)
+                tilted_value = ghi_value
+
+        raw_uv = series("ALLSKY_SFC_UV_INDEX", key)
+        uv_value = raw_uv if raw_uv is not None else estimate_solar_components(lat, lon, iso_time, cloud_value)["uv_index"]
 
         temperature.append(round(temp_value, 3))
         humidity.append(round(humidity_value, 3))
@@ -1139,10 +1237,11 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
         pressure.append(round(pressure_value, 3))
         wind_speed.append(round(max(0.0, wind_value), 3))
         cloud_cover.append(round(cloud_value, 3))
-        uv_index.append(round(max(0.0, series("ALLSKY_SFC_UV_INDEX", key) or 0.0), 3))
+        uv_index.append(round(max(0.0, uv_value or 0.0), 3))
         ghi.append(round(ghi_value, 3))
         dni.append(round(direct_value, 3))
         dhi.append(round(diffuse_value, 3))
+        global_tilted.append(round(tilted_value, 3))
 
     daily_groups: dict[str, dict[str, list[float]]] = {}
     for i, time_value in enumerate(times):
@@ -1154,7 +1253,13 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
         daily_groups[day]["uv"].append(uv_index[i])
 
     daily_times = sorted(daily_groups)
-    latest_time = times[-1]
+    current_idx = reference_idx if reference_idx < len(times) else len(times) - 1
+    latest_time = times[current_idx]
+    solar_note = (
+        "Hourly fallback used because the primary live forecast provider was unavailable."
+    )
+    if estimated_solar_count:
+        solar_note += " Missing NASA radiation fields were estimated from solar position and weather conditions."
     return {
         "timezone": "UTC",
         "elevation": None,
@@ -1173,29 +1278,29 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
             "shortwave_radiation": ghi,
             "direct_normal_irradiance": dni,
             "diffuse_radiation": dhi,
-            "global_tilted_irradiance": ghi,
+            "global_tilted_irradiance": global_tilted,
         },
         "current": {
             "time": latest_time,
-            "temperature_2m": temperature[-1],
-            "relative_humidity_2m": humidity[-1],
-            "apparent_temperature": temperature[-1],
-            "is_day": 1 if ghi[-1] > 0 else 0,
+            "temperature_2m": temperature[current_idx],
+            "relative_humidity_2m": humidity[current_idx],
+            "apparent_temperature": temperature[current_idx],
+            "is_day": 1 if ghi[current_idx] > 0 else 0,
             "precipitation": 0.0,
-            "weather_code": 0 if cloud_cover[-1] < 20 else 2,
-            "cloud_cover": cloud_cover[-1],
-            "pressure_msl": pressure[-1],
-            "surface_pressure": pressure[-1],
-            "wind_speed_10m": wind_speed[-1],
+            "weather_code": 0 if cloud_cover[current_idx] < 20 else 2,
+            "cloud_cover": cloud_cover[current_idx],
+            "pressure_msl": pressure[current_idx],
+            "surface_pressure": pressure[current_idx],
+            "wind_speed_10m": wind_speed[current_idx],
             "wind_direction_10m": 0.0,
-            "wind_gusts_10m": wind_speed[-1],
+            "wind_gusts_10m": wind_speed[current_idx],
         },
         "daily": {
             "time": daily_times,
             "sunrise": [f"{day}T06:00" for day in daily_times],
             "sunset": [f"{day}T18:00" for day in daily_times],
             "uv_index_max": [max(daily_groups[day]["uv"] or [0.0]) for day in daily_times],
-            "shortwave_radiation_sum": [round(sum(daily_groups[day]["ghi"]) / 1000.0, 3) for day in daily_times],
+            "shortwave_radiation_sum": [round(sum(daily_groups[day]["ghi"]) * 0.0036, 3) for day in daily_times],
             "temperature_2m_max": [max(daily_groups[day]["temp"]) for day in daily_times],
             "temperature_2m_min": [min(daily_groups[day]["temp"]) for day in daily_times],
             "precipitation_sum": [0.0] * len(daily_times),
@@ -1205,7 +1310,8 @@ def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
             "source": "NASA POWER",
             "start": start.strftime("%Y%m%d"),
             "end": end.strftime("%Y%m%d"),
-            "note": "Hourly fallback used because the primary live forecast provider was unavailable.",
+            "estimated_solar_points": estimated_solar_count,
+            "note": solar_note,
         },
     }
 
