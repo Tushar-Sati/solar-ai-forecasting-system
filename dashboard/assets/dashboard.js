@@ -5,11 +5,15 @@ const state = {
   history: [],
   refreshTimer: null,
   refreshSeconds: 300,
+  isLoading: false,
   charts: {},
   map: null,
   marker: null,
   circle: null,
 };
+
+const MIN_REFRESH_SECONDS = 300;
+const MAX_REFRESH_SECONDS = 3600;
 
 const DEFAULT_LOCATION = {
   name: "New Delhi",
@@ -98,7 +102,7 @@ function setInitialLoadingState() {
 async function checkHealth() {
   try {
     const data = await Solar.request("/health", { auth: false });
-    state.refreshSeconds = Number(data.refresh_seconds || state.refreshSeconds);
+    state.refreshSeconds = normalizeRefreshSeconds(data.refresh_seconds || state.refreshSeconds);
     document.getElementById("api-dot")?.classList.add("ok");
     Solar.setText("api-status", data.models.xgboost && data.models.lstm ? "API online" : "API online, model issue");
   } catch (error) {
@@ -106,6 +110,12 @@ async function checkHealth() {
     Solar.setText("api-status", "API offline");
     Solar.showToast(error.message, "error");
   }
+}
+
+function normalizeRefreshSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return MIN_REFRESH_SECONDS;
+  return Math.min(MAX_REFRESH_SECONDS, Math.max(MIN_REFRESH_SECONDS, Math.round(seconds)));
 }
 
 async function searchLocation() {
@@ -217,16 +227,25 @@ function setLocationBusy(isBusy) {
 
 async function loadAll(resetTimer = false) {
   if (!state.location) return;
+  if (state.isLoading) return;
+  state.isLoading = true;
   if (resetTimer) restartAutoRefresh();
-  await checkHealth();
-  await loadWeather();
-  await Promise.all([loadPrediction(), loadHistory(), loadPredictionTable(), loadPowerBIViews()]);
+  try {
+    await checkHealth();
+    await loadWeather();
+    await Promise.all([loadPrediction(), loadHistory(), loadPredictionTable(), loadPowerBIViews()]);
+  } finally {
+    state.isLoading = false;
+  }
 }
 
 function restartAutoRefresh() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
-  state.refreshTimer = setInterval(() => loadAll(false), state.refreshSeconds * 1000);
-  Solar.setText("refresh-meta", `Auto-refresh every ${Math.round(state.refreshSeconds / 60)} minutes`);
+  const seconds = normalizeRefreshSeconds(state.refreshSeconds);
+  state.refreshSeconds = seconds;
+  state.refreshTimer = setInterval(() => loadAll(false), seconds * 1000);
+  const minutes = Math.round(seconds / 60);
+  Solar.setText("refresh-meta", `Auto-refresh every ${minutes} minute${minutes === 1 ? "" : "s"}`);
 }
 
 async function loadWeather() {
@@ -297,7 +316,7 @@ async function loadPrediction() {
     document.getElementById("kpi-co2") ||
     document.getElementById("kpi-eff");
   if (!needsPrediction) return;
-  resetPredictionUi();
+  if (!state.prediction) resetPredictionUi();
   try {
     const data = await Solar.request("/predict", {
       method: "POST",
@@ -318,7 +337,7 @@ async function loadPrediction() {
     Solar.setText("kpi-power", power.estimated_power_kw === null || power.estimated_power_kw === undefined ? "--" : Solar.fmt(power.estimated_power_kw, 3));
     Solar.setText("kpi-co2", power.co2_offset_kg === null || power.co2_offset_kg === undefined ? "--" : Solar.fmt(power.co2_offset_kg, 3));
     Solar.setText("kpi-eff", power.efficiency_pct === null || power.efficiency_pct === undefined ? "--" : Solar.fmt(power.efficiency_pct, 1));
-    Solar.setText("kpi-power-note", power.configured ? "Calculated from saved PV settings" : power.message || "PV settings required");
+    Solar.setText("kpi-power-note", data.warning || (power.configured ? "Calculated from saved PV settings" : power.message || "PV settings required"));
   } catch (error) {
     Solar.showToast(error.message, "error");
     Solar.setText("kpi-power-note", "Prediction unavailable");

@@ -15,7 +15,6 @@ window.Solar = (() => {
     const origin = window.location.origin;
     const stored = localStorage.getItem("solar_api_base");
     const candidates = [
-      stored,
       `${origin}/api`,
       "http://127.0.0.1:5000/api",
       "http://127.0.0.1:5001/api",
@@ -23,6 +22,7 @@ window.Solar = (() => {
       "http://localhost:5000/api",
       "http://localhost:5001/api",
       "http://localhost:5002/api",
+      stored,
     ].filter(Boolean);
     return [...new Set(candidates)];
   }

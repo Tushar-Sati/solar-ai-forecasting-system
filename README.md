@@ -91,5 +91,7 @@ Use these views from `sql/002_powerbi_views.sql`:
 - Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before first startup or create the first admin through bootstrap.
 - On Render, keep the Docker deployment and let the container bind to Render's `PORT` environment variable.
 - For persistent Render data, attach a disk and set `SQLITE_DB_PATH` to a path on that disk, for example `/var/data/solar_forecast_db.sqlite3`.
+- Leave `APP_REFRESH_SECONDS` at `300` or higher so the browser does not hammer the live providers.
+- `ALLOW_NASA_POWER_WEATHER_FALLBACK=true` lets deployment keep producing model output from recent NASA POWER hourly data when Open-Meteo rate-limits Render.
 - Keep `ALLOW_SIMULATED_WEATHER_FALLBACK=false` for real forecasts. Only set it to `true` for an offline demo.
 - Keep model artifacts under `data/models/` and restrict upload access to admins.

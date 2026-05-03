@@ -53,9 +53,27 @@ MODEL_DIR = base_path_from_env("MODEL_DIR", "data/models")
 SQLITE_DB_FILE = base_path_from_env("SQLITE_DB_PATH", "solar_forecast_db.sqlite3")
 OPENWEATHERMAP_API_KEY = os.getenv("OPENWEATHERMAP_API_KEY") or os.getenv("OWM_API_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
-APP_REFRESH_SECONDS = int(os.getenv("APP_REFRESH_SECONDS", "300"))
+
+
+def env_int(name: str, default: int, minimum: int | None = None) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+APP_REFRESH_SECONDS = env_int("APP_REFRESH_SECONDS", 300, minimum=300)
 ENSEMBLE_XGB_WEIGHT = float(os.getenv("ENSEMBLE_XGB_WEIGHT", "0.60"))
 GRID_EMISSION_FACTOR = float(os.getenv("GRID_EMISSION_FACTOR_KG_PER_KWH", "0.82"))
+ALLOW_NASA_POWER_WEATHER_FALLBACK = os.getenv("ALLOW_NASA_POWER_WEATHER_FALLBACK", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 ALLOW_SIMULATED_WEATHER_FALLBACK = os.getenv("ALLOW_SIMULATED_WEATHER_FALLBACK", "false").lower() in {
     "1",
     "true",
@@ -542,7 +560,12 @@ def weather_cache_key(lat: float, lon: float) -> str:
 def cache_weather_bundle(lat: float, lon: float, bundle: dict[str, Any]) -> None:
     key = weather_cache_key(lat, lon)
     WEATHER_BUNDLE_CACHE[key] = (time.time(), copy.deepcopy(bundle))
-    log_system("info", "weather-cache", "Stored Open-Meteo weather bundle", {"cache_key": key})
+    log_system(
+        "info",
+        "weather-cache",
+        "Stored weather bundle",
+        {"cache_key": key, "provider": bundle.get("provider")},
+    )
 
 
 def cached_weather_bundle(lat: float, lon: float, allow_stale: bool = False) -> dict[str, Any] | None:
@@ -990,6 +1013,203 @@ def fetch_nasa_power(lat: float, lon: float) -> dict[str, Any] | None:
         return None
 
 
+def clean_nasa_value(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= -900:
+        return None
+    return number
+
+
+def clamp_number(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def estimate_dew_point_c(temperature_c: float, humidity_pct: float) -> float:
+    humidity = clamp_number(humidity_pct, 1.0, 100.0)
+    gamma = np.log(humidity / 100.0) + (17.625 * temperature_c) / (243.04 + temperature_c)
+    return round((243.04 * gamma) / (17.625 - gamma), 2)
+
+
+def nasa_time_key_to_iso(value: str) -> str | None:
+    if len(value) != 10 or not value.isdigit():
+        return None
+    return f"{value[0:4]}-{value[4:6]}-{value[6:8]}T{value[8:10]}:00"
+
+
+def fetch_nasa_power_weather_payload(lat: float, lon: float) -> dict[str, Any]:
+    end = datetime.utcnow() - timedelta(days=3)
+    start = end - timedelta(days=5)
+    payload = fetch_json(
+        "NASA POWER Weather Fallback",
+        "https://power.larc.nasa.gov/api/temporal/hourly/point",
+        {
+            "parameters": "ALLSKY_SFC_SW_DWN,CLRSKY_SFC_SW_DWN,T2M,T2MDEW,RH2M,WS10M,PS,ALLSKY_SFC_UV_INDEX",
+            "community": "RE",
+            "longitude": lon,
+            "latitude": lat,
+            "start": start.strftime("%Y%m%d"),
+            "end": end.strftime("%Y%m%d"),
+            "format": "JSON",
+            "time-standard": "UTC",
+        },
+        timeout=15,
+    )
+    params = (payload.get("properties") or {}).get("parameter") or {}
+    keys = sorted(
+        {
+            key
+            for series in params.values()
+            if isinstance(series, dict)
+            for key in series.keys()
+            if nasa_time_key_to_iso(str(key))
+        }
+    )
+    if len(keys) < 49:
+        raise ValueError("NASA POWER returned too few hourly points for model lag features.")
+
+    def series(name: str, key: str) -> float | None:
+        values = params.get(name) or {}
+        return clean_nasa_value(values.get(key))
+
+    times: list[str] = []
+    temperature: list[float] = []
+    humidity: list[float] = []
+    dew_point: list[float] = []
+    pressure: list[float] = []
+    wind_speed: list[float] = []
+    cloud_cover: list[float] = []
+    uv_index: list[float] = []
+    ghi: list[float] = []
+    dni: list[float] = []
+    dhi: list[float] = []
+
+    last_temp = 25.0
+    last_humidity = 50.0
+    last_pressure = 1013.0
+    last_wind = 2.0
+    for key in keys:
+        iso_time = nasa_time_key_to_iso(str(key))
+        if not iso_time:
+            continue
+        times.append(iso_time)
+
+        ghi_value = max(0.0, series("ALLSKY_SFC_SW_DWN", key) or 0.0)
+        clear_sky = max(ghi_value, series("CLRSKY_SFC_SW_DWN", key) or ghi_value)
+        if clear_sky > 0:
+            cloud_value = clamp_number(100.0 * (1.0 - min(ghi_value / clear_sky, 1.0)), 0.0, 100.0)
+        else:
+            cloud_value = 0.0
+
+        temp_value = series("T2M", key)
+        if temp_value is None:
+            temp_value = last_temp
+        last_temp = temp_value
+
+        humidity_value = series("RH2M", key)
+        if humidity_value is None:
+            humidity_value = last_humidity
+        humidity_value = clamp_number(humidity_value, 0.0, 100.0)
+        last_humidity = humidity_value
+
+        pressure_value = series("PS", key)
+        if pressure_value is None:
+            pressure_value = last_pressure
+        if pressure_value < 200:
+            pressure_value *= 10.0
+        last_pressure = pressure_value
+
+        wind_value = series("WS10M", key)
+        if wind_value is None:
+            wind_value = last_wind
+        last_wind = wind_value
+
+        dew_value = series("T2MDEW", key)
+        if dew_value is None:
+            dew_value = estimate_dew_point_c(temp_value, humidity_value)
+
+        direct_value = max(0.0, ghi_value * (1.0 - 0.75 * (cloud_value / 100.0)))
+        diffuse_value = max(0.0, ghi_value - direct_value * 0.70)
+
+        temperature.append(round(temp_value, 3))
+        humidity.append(round(humidity_value, 3))
+        dew_point.append(round(dew_value, 3))
+        pressure.append(round(pressure_value, 3))
+        wind_speed.append(round(max(0.0, wind_value), 3))
+        cloud_cover.append(round(cloud_value, 3))
+        uv_index.append(round(max(0.0, series("ALLSKY_SFC_UV_INDEX", key) or 0.0), 3))
+        ghi.append(round(ghi_value, 3))
+        dni.append(round(direct_value, 3))
+        dhi.append(round(diffuse_value, 3))
+
+    daily_groups: dict[str, dict[str, list[float]]] = {}
+    for i, time_value in enumerate(times):
+        day = time_value[:10]
+        daily_groups.setdefault(day, {"ghi": [], "temp": [], "wind": [], "uv": []})
+        daily_groups[day]["ghi"].append(ghi[i])
+        daily_groups[day]["temp"].append(temperature[i])
+        daily_groups[day]["wind"].append(wind_speed[i])
+        daily_groups[day]["uv"].append(uv_index[i])
+
+    daily_times = sorted(daily_groups)
+    latest_time = times[-1]
+    return {
+        "timezone": "UTC",
+        "elevation": None,
+        "hourly": {
+            "time": times,
+            "temperature_2m": temperature,
+            "relative_humidity_2m": humidity,
+            "dew_point_2m": dew_point,
+            "apparent_temperature": temperature,
+            "pressure_msl": pressure,
+            "surface_pressure": pressure,
+            "cloud_cover": cloud_cover,
+            "wind_speed_10m": wind_speed,
+            "wind_direction_10m": [0.0] * len(times),
+            "uv_index": uv_index,
+            "shortwave_radiation": ghi,
+            "direct_normal_irradiance": dni,
+            "diffuse_radiation": dhi,
+            "global_tilted_irradiance": ghi,
+        },
+        "current": {
+            "time": latest_time,
+            "temperature_2m": temperature[-1],
+            "relative_humidity_2m": humidity[-1],
+            "apparent_temperature": temperature[-1],
+            "is_day": 1 if ghi[-1] > 0 else 0,
+            "precipitation": 0.0,
+            "weather_code": 0 if cloud_cover[-1] < 20 else 2,
+            "cloud_cover": cloud_cover[-1],
+            "pressure_msl": pressure[-1],
+            "surface_pressure": pressure[-1],
+            "wind_speed_10m": wind_speed[-1],
+            "wind_direction_10m": 0.0,
+            "wind_gusts_10m": wind_speed[-1],
+        },
+        "daily": {
+            "time": daily_times,
+            "sunrise": [f"{day}T06:00" for day in daily_times],
+            "sunset": [f"{day}T18:00" for day in daily_times],
+            "uv_index_max": [max(daily_groups[day]["uv"] or [0.0]) for day in daily_times],
+            "shortwave_radiation_sum": [round(sum(daily_groups[day]["ghi"]) / 1000.0, 3) for day in daily_times],
+            "temperature_2m_max": [max(daily_groups[day]["temp"]) for day in daily_times],
+            "temperature_2m_min": [min(daily_groups[day]["temp"]) for day in daily_times],
+            "precipitation_sum": [0.0] * len(daily_times),
+            "wind_speed_10m_max": [max(daily_groups[day]["wind"]) for day in daily_times],
+        },
+        "nasa_power": {
+            "source": "NASA POWER",
+            "start": start.strftime("%Y%m%d"),
+            "end": end.strftime("%Y%m%d"),
+            "note": "Hourly fallback used because the primary live forecast provider was unavailable.",
+        },
+    }
+
+
 def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
     lat = float(location["lat"])
     lon = float(location["lon"])
@@ -1061,7 +1281,24 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
                 "Live Open-Meteo is temporarily rate limited. Showing cached weather data."
             )
             return cached
-        return rate_limited_weather_bundle(location, lat, lon, exc)
+        if ALLOW_NASA_POWER_WEATHER_FALLBACK:
+            try:
+                payload = fetch_nasa_power_weather_payload(lat, lon)
+                provider_name = "NASA POWER"
+                provider_warning = (
+                    "Open-Meteo is rate limited from this deployment. "
+                    "Using the latest available NASA POWER hourly data for model inference."
+                )
+            except Exception as fallback_exc:
+                log_system(
+                    "warning",
+                    "weather",
+                    "NASA POWER fallback unavailable after Open-Meteo rate limit",
+                    {"error": str(fallback_exc), "rate_limit_url": exc.url},
+                )
+                return rate_limited_weather_bundle(location, lat, lon, exc)
+        else:
+            return rate_limited_weather_bundle(location, lat, lon, exc)
     except Exception as exc:
         log_system("error", "weather", "Open-Meteo forecast request failed", {"error": str(exc)})
         cached = cached_weather_bundle(lat, lon, allow_stale=True)
@@ -1070,7 +1307,22 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
                 "Live Open-Meteo is temporarily unavailable. Showing cached weather data."
             )
             return cached
-        if not ALLOW_SIMULATED_WEATHER_FALLBACK:
+        if ALLOW_NASA_POWER_WEATHER_FALLBACK:
+            try:
+                payload = fetch_nasa_power_weather_payload(lat, lon)
+                provider_name = "NASA POWER"
+                provider_warning = (
+                    "Open-Meteo is temporarily unavailable. "
+                    "Using the latest available NASA POWER hourly data for model inference."
+                )
+            except Exception as fallback_exc:
+                log_system(
+                    "warning",
+                    "weather",
+                    "NASA POWER fallback unavailable after Open-Meteo failure",
+                    {"error": str(fallback_exc), "open_meteo_error": str(exc)},
+                )
+        if provider_name != "NASA POWER" and not ALLOW_SIMULATED_WEATHER_FALLBACK:
             return weather_warning_bundle(
                 location,
                 lat,
@@ -1080,67 +1332,69 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
                 "Open-Meteo forecast request failed and no cached bundle was available",
                 {"error": str(exc)},
             )
-        provider_name = "Simulated Weather Fallback"
-        provider_warning = "Live Open-Meteo request failed; simulated weather is enabled for this deployment."
-        print(f"Open-Meteo failed: {exc}. Using explicitly enabled simulated fallback payload.")
-        now = datetime.utcnow()
-        times = [(now + timedelta(hours=i - 96)).isoformat()[:16] for i in range(24 * 11)]
-        def sim_val(t_str, base, peak_hour, amplitude):
-            dt = datetime.fromisoformat(t_str)
-            hour_diff = abs(dt.hour - peak_hour)
-            return max(0, base + amplitude * (1 - hour_diff / 8.0))
-        
-        hourly_data = {
-            "time": times,
-            "temperature_2m": [sim_val(t, 15, 14, 15) for t in times],
-            "relative_humidity_2m": [sim_val(t, 40, 4, 40) for t in times],
-            "dew_point_2m": [10.0] * len(times),
-            "apparent_temperature": [sim_val(t, 15, 14, 15) for t in times],
-            "pressure_msl": [1013.0] * len(times),
-            "surface_pressure": [1013.0] * len(times),
-            "cloud_cover": [20.0] * len(times),
-            "wind_speed_10m": [3.0] * len(times),
-            "wind_direction_10m": [180.0] * len(times),
-            "uv_index": [sim_val(t, 0, 13, 8) for t in times],
-            "shortwave_radiation": [sim_val(t, 0, 13, 800) for t in times],
-            "direct_normal_irradiance": [sim_val(t, 0, 13, 800) * 0.8 for t in times],
-            "diffuse_radiation": [sim_val(t, 0, 13, 800) * 0.2 for t in times],
-            "global_tilted_irradiance": [sim_val(t, 0, 13, 800) * 1.1 for t in times],
-        }
-        current_data = {
-            "time": times[96],
-            "temperature_2m": hourly_data["temperature_2m"][96],
-            "relative_humidity_2m": hourly_data["relative_humidity_2m"][96],
-            "apparent_temperature": hourly_data["apparent_temperature"][96],
-            "is_day": 1 if hourly_data["shortwave_radiation"][96] > 0 else 0,
-            "precipitation": 0.0,
-            "weather_code": 0,
-            "cloud_cover": 20.0,
-            "pressure_msl": 1013.0,
-            "surface_pressure": 1013.0,
-            "wind_speed_10m": 3.0,
-            "wind_direction_10m": 180.0,
-            "wind_gusts_10m": 4.0,
-        }
-        daily_times = [(now.date() + timedelta(days=i - 4)).isoformat() for i in range(11)]
-        daily_data = {
-            "time": daily_times,
-            "sunrise": [f"{dt}T06:00" for dt in daily_times],
-            "sunset": [f"{dt}T18:00" for dt in daily_times],
-            "uv_index_max": [8.0] * len(daily_times),
-            "shortwave_radiation_sum": [20.0] * len(daily_times),
-            "temperature_2m_max": [30.0] * len(daily_times),
-            "temperature_2m_min": [15.0] * len(daily_times),
-            "precipitation_sum": [0.0] * len(daily_times),
-            "wind_speed_10m_max": [5.0] * len(daily_times),
-        }
-        payload = {
-            "timezone": "UTC",
-            "elevation": 10.0,
-            "hourly": hourly_data,
-            "current": current_data,
-            "daily": daily_data,
-        }
+        if provider_name != "NASA POWER":
+            provider_name = "Simulated Weather Fallback"
+            provider_warning = "Live Open-Meteo request failed; simulated weather is enabled for this deployment."
+            print(f"Open-Meteo failed: {exc}. Using explicitly enabled simulated fallback payload.")
+            now = datetime.utcnow()
+            times = [(now + timedelta(hours=i - 96)).isoformat()[:16] for i in range(24 * 11)]
+
+            def sim_val(t_str, base, peak_hour, amplitude):
+                dt = datetime.fromisoformat(t_str)
+                hour_diff = abs(dt.hour - peak_hour)
+                return max(0, base + amplitude * (1 - hour_diff / 8.0))
+
+            hourly_data = {
+                "time": times,
+                "temperature_2m": [sim_val(t, 15, 14, 15) for t in times],
+                "relative_humidity_2m": [sim_val(t, 40, 4, 40) for t in times],
+                "dew_point_2m": [10.0] * len(times),
+                "apparent_temperature": [sim_val(t, 15, 14, 15) for t in times],
+                "pressure_msl": [1013.0] * len(times),
+                "surface_pressure": [1013.0] * len(times),
+                "cloud_cover": [20.0] * len(times),
+                "wind_speed_10m": [3.0] * len(times),
+                "wind_direction_10m": [180.0] * len(times),
+                "uv_index": [sim_val(t, 0, 13, 8) for t in times],
+                "shortwave_radiation": [sim_val(t, 0, 13, 800) for t in times],
+                "direct_normal_irradiance": [sim_val(t, 0, 13, 800) * 0.8 for t in times],
+                "diffuse_radiation": [sim_val(t, 0, 13, 800) * 0.2 for t in times],
+                "global_tilted_irradiance": [sim_val(t, 0, 13, 800) * 1.1 for t in times],
+            }
+            current_data = {
+                "time": times[96],
+                "temperature_2m": hourly_data["temperature_2m"][96],
+                "relative_humidity_2m": hourly_data["relative_humidity_2m"][96],
+                "apparent_temperature": hourly_data["apparent_temperature"][96],
+                "is_day": 1 if hourly_data["shortwave_radiation"][96] > 0 else 0,
+                "precipitation": 0.0,
+                "weather_code": 0,
+                "cloud_cover": 20.0,
+                "pressure_msl": 1013.0,
+                "surface_pressure": 1013.0,
+                "wind_speed_10m": 3.0,
+                "wind_direction_10m": 180.0,
+                "wind_gusts_10m": 4.0,
+            }
+            daily_times = [(now.date() + timedelta(days=i - 4)).isoformat() for i in range(11)]
+            daily_data = {
+                "time": daily_times,
+                "sunrise": [f"{dt}T06:00" for dt in daily_times],
+                "sunset": [f"{dt}T18:00" for dt in daily_times],
+                "uv_index_max": [8.0] * len(daily_times),
+                "shortwave_radiation_sum": [20.0] * len(daily_times),
+                "temperature_2m_max": [30.0] * len(daily_times),
+                "temperature_2m_min": [15.0] * len(daily_times),
+                "precipitation_sum": [0.0] * len(daily_times),
+                "wind_speed_10m_max": [5.0] * len(daily_times),
+            }
+            payload = {
+                "timezone": "UTC",
+                "elevation": 10.0,
+                "hourly": hourly_data,
+                "current": current_data,
+                "daily": daily_data,
+            }
     hourly = payload.get("hourly") or {}
     daily = payload.get("daily") or {}
     current = payload.get("current") or {}
@@ -1209,9 +1463,10 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
             **location,
             "timezone": payload.get("timezone") or location.get("timezone"),
             "elevation_m": payload.get("elevation") or location.get("elevation_m"),
-        }
+        },
+        data_source=provider_name,
     )
-    save_solar_reading(location_id, current_data)
+    save_solar_reading(location_id, current_data, provider_name)
 
     bundle = {
         "provider": provider_name,
@@ -1227,17 +1482,17 @@ def fetch_weather_bundle(location: dict[str, Any]) -> dict[str, Any]:
         "current": current_data,
         "hourly": hourly_rows,
         "daily": daily_rows,
-        "nasa_power": fetch_nasa_power(lat, lon),
+        "nasa_power": payload.get("nasa_power") if provider_name == "NASA POWER" else fetch_nasa_power(lat, lon),
         "raw_hourly": hourly,
         "current_hour_index": idx,
         "fetched_at": datetime.now().isoformat(),
     }
-    if provider_name == "Open-Meteo":
+    if provider_name in {"Open-Meteo", "NASA POWER"}:
         cache_weather_bundle(lat, lon, bundle)
     return bundle
 
 
-def save_solar_reading(location_id: int, current_data: dict[str, Any]) -> None:
+def save_solar_reading(location_id: int, current_data: dict[str, Any], data_source: str = "Open-Meteo") -> None:
     try:
         ts = parse_dt(current_data.get("time")) or datetime.now()
         db_execute(
@@ -1261,7 +1516,7 @@ def save_solar_reading(location_id: int, current_data: dict[str, Any]) -> None:
                 current_data.get("cloud_cover_pct"),
                 current_data.get("dew_point_c"),
                 current_data.get("uv_index"),
-                "Open-Meteo",
+                data_source,
             ),
         )
     except Exception as exc:
@@ -1609,11 +1864,13 @@ def health():
             "schema": schema_ok,
             "providers": {
                 "primary": ["Open-Meteo"],
+                "fallback": ["NASA POWER"] if ALLOW_NASA_POWER_WEATHER_FALLBACK else [],
                 "enrichment": ["NASA POWER"],
                 "optional_keys": {
                     "openweathermap": bool(OPENWEATHERMAP_API_KEY),
                     "weatherapi": bool(WEATHERAPI_KEY),
                 },
+                "nasa_power_fallback_enabled": ALLOW_NASA_POWER_WEATHER_FALLBACK,
                 "simulated_fallback_enabled": ALLOW_SIMULATED_WEATHER_FALLBACK,
             },
         }
@@ -1718,6 +1975,7 @@ def predict():
             {
                 "status": "success",
                 "prediction_id": prediction_id,
+                "warning": weather_bundle.get("warning"),
                 "location": to_jsonable(weather_bundle["location"]),
                 "current": to_jsonable(weather_bundle["current"]),
                 "predictions": to_jsonable(prediction_result["predictions"]),
