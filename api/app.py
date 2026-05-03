@@ -65,9 +65,29 @@ def env_int(name: str, default: int, minimum: int | None = None) -> int:
     return value
 
 
+def env_float(name: str, default: float, minimum: float | None = None) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
 APP_REFRESH_SECONDS = env_int("APP_REFRESH_SECONDS", 300, minimum=300)
 ENSEMBLE_XGB_WEIGHT = float(os.getenv("ENSEMBLE_XGB_WEIGHT", "0.60"))
 GRID_EMISSION_FACTOR = float(os.getenv("GRID_EMISSION_FACTOR_KG_PER_KWH", "0.82"))
+DEFAULT_PV_SYSTEM = {
+    "system_name": os.getenv("DEFAULT_PV_SYSTEM_NAME", "Demo 5 kW Rooftop PV"),
+    "capacity_kw": env_float("DEFAULT_PV_CAPACITY_KW", 5.0, minimum=0.1),
+    "panel_area_m2": env_float("DEFAULT_PV_PANEL_AREA_M2", 25.0, minimum=0.1),
+    "panel_efficiency_pct": env_float("DEFAULT_PV_PANEL_EFFICIENCY_PCT", 20.0, minimum=0.1),
+    "tilt_deg": env_float("DEFAULT_PV_TILT_DEG", 28.0),
+    "azimuth_deg": env_float("DEFAULT_PV_AZIMUTH_DEG", 180.0),
+    "loss_pct": env_float("DEFAULT_PV_LOSS_PCT", 14.0, minimum=0.0),
+    "inverter_efficiency_pct": env_float("DEFAULT_PV_INVERTER_EFFICIENCY_PCT", 96.0, minimum=0.1),
+}
 ALLOW_NASA_POWER_WEATHER_FALLBACK = os.getenv("ALLOW_NASA_POWER_WEATHER_FALLBACK", "true").lower() in {
     "1",
     "true",
@@ -446,6 +466,7 @@ def ensure_schema() -> None:
 
     try:
         seed_admin_user()
+        seed_default_pv_config()
         install_powerbi_views()
     except Exception as exc:
         print(f"Startup setup warning: {exc}")
@@ -467,6 +488,40 @@ def seed_admin_user() -> None:
         """,
         (name, email, generate_password_hash(password)),
     )
+
+
+def seed_default_pv_config() -> None:
+    existing = db_query_one(
+        """
+        SELECT config_id FROM pv_system_configs
+        WHERE is_default=1
+        ORDER BY updated_at DESC, config_id DESC
+        LIMIT 1
+        """
+    )
+    if existing:
+        return
+
+    config_id = db_execute(
+        """
+        INSERT INTO pv_system_configs
+          (system_name, capacity_kw, panel_area_m2, panel_efficiency_pct,
+           tilt_deg, azimuth_deg, loss_pct, inverter_efficiency_pct,
+           location_id, is_default)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NULL,1)
+        """,
+        (
+            DEFAULT_PV_SYSTEM["system_name"],
+            DEFAULT_PV_SYSTEM["capacity_kw"],
+            DEFAULT_PV_SYSTEM["panel_area_m2"],
+            DEFAULT_PV_SYSTEM["panel_efficiency_pct"],
+            DEFAULT_PV_SYSTEM["tilt_deg"],
+            DEFAULT_PV_SYSTEM["azimuth_deg"],
+            DEFAULT_PV_SYSTEM["loss_pct"],
+            DEFAULT_PV_SYSTEM["inverter_efficiency_pct"],
+        ),
+    )
+    log_system("info", "pv-config", "Default PV system configuration created", {"config_id": config_id})
 
 
 def install_powerbi_views() -> None:
@@ -1678,7 +1733,6 @@ def build_feature_row(hourly: dict[str, list[Any]], idx: int) -> list[float]:
 
 
 def get_default_pv_config(location_id: int | None = None) -> dict[str, Any] | None:
-    params: tuple[Any, ...]
     if location_id:
         row = db_query_one(
             """
@@ -1697,6 +1751,29 @@ def get_default_pv_config(location_id: int | None = None) -> dict[str, Any] | No
             ORDER BY updated_at DESC LIMIT 1
             """
         )
+    if not row:
+        try:
+            seed_default_pv_config()
+        except Exception as exc:
+            log_system("warning", "pv-config", "Could not create default PV configuration", {"error": str(exc)})
+        if location_id:
+            row = db_query_one(
+                """
+                SELECT * FROM pv_system_configs
+                WHERE location_id=%s OR is_default=1
+                ORDER BY location_id=%s DESC, is_default DESC, updated_at DESC
+                LIMIT 1
+                """,
+                (location_id, location_id),
+            )
+        else:
+            row = db_query_one(
+                """
+                SELECT * FROM pv_system_configs
+                WHERE is_default=1
+                ORDER BY updated_at DESC LIMIT 1
+                """
+            )
     return to_jsonable(row) if row else None
 
 
