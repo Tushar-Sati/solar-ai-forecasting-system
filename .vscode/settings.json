@@ -1,0 +1,12 @@
+{
+  "liveServer.settings.ignoreFiles": [
+    "**/.git/**",
+    "**/__pycache__/**",
+    "**/venv/**",
+    "**/venv_gpu/**",
+    "**/solar_forecast_db.sqlite3",
+    "**/solar_forecast_db.sqlite3-*",
+    "**/uploads/**",
+    "**/*.log"
+  ]
+}
